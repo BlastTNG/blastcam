@@ -1,0 +1,312 @@
+
+NAME
+       solve-field - Main high-level command-line user interface.
+
+SYNOPSIS
+       solve-field [options] [image-file-1 image-file-2 ...]  [xyls-file-1 xyls-file-2 ...]
+
+DESCRIPTION
+       Main high-level command-line user interface for astrometry.net
+
+       You can specify http:// or ftp:// URLs instead of filenames.  The "wget" or "curl" program will be used to retrieve the URL.
+
+       The  astrometry  engine  will  take any image and return the astrometry world coordinate system (WCS), ie a standards-based description of the (usually nonlinear) transformation
+       between image coordinates and sky coordinates with absolutely no “false positives” (but maybe some “no answers”). It will do its best, even  when  the  input  image  has  no  or
+       totally incorrect meta data.
+
+OPTIONS
+       -h, --help
+              Print the help message
+
+       -v, --verbose
+              Be more chatty. Repeat for even more verboseness
+
+       -D, --dir directory
+              Place all output files in the specified directory
+
+       -o, --out file
+              Name the output files with this base name
+
+       -b, --backend-config file
+              Use this config file for the "astrometry-engine" program
+
+       --config file
+              Use this config file for the "astrometry-engine" program
+
+       --batch
+              Run astrometry-engine once, rather than once per input file
+
+       -f, --files-on-stdin
+              Read filenames to solve on stdin, one per line
+
+       -p, --no-plots
+              Don't create any plots of the results
+
+       --plot-scale scale
+              Scale the plots by this factor (eg, 0.25)
+
+       --plot-bg file
+              Set the background image to use for plots (JPEG)
+
+       -G, --use-wget
+              Use wget instead of curl
+
+       -O, --overwrite
+              Overwrite output files if they already exist
+
+       -K, --continue
+              Don't overwrite output files if they already exist; continue a previous run
+
+       -J, --skip-solved
+              Skip input files for which the 'solved' output file already exists; NOTE: this assumes single-field input files
+
+       --fits-image
+              assume the input files are FITS images
+              assume the input files are FITS images
+
+       -N, --new-fits file
+              Output filename of the new FITS file containing the WCS header; "none" to not create this file
+
+       -Z, --kmz file
+              Create KMZ file for Google Sky. (requires wcs2kml)
+
+       -i, --scamp file
+              Create image object catalog for SCAMP
+
+       -n, --scamp-config file
+              Create SCAMP config file snippet
+
+       -U, --index-xyls file
+              Output filename for xylist containing the image coordinate of stars from the index
+
+       --just-augment
+              Just write the augmented xylist files; don't run astrometry-engine.
+
+       --axy file
+              Output filename for augment xy list (axy)
+
+       --temp-axy
+              Write 'augmented xy list' (axy) file to a temp file
+
+       --timestamp
+              Add timestamps to log messages
+
+       -7, --no-delete-temp
+              Don't delete temp files (for debugging)
+
+       -L, --scale-low scale
+              Lower bound of image scale estimate
+
+       -H, --scale-high scale
+              Upper bound of image scale estimate
+
+       -u, --scale-units units
+              In what units are the lower and upper bounds? Choices:
+
+              "degwidth", "degw", "dw"
+                     width of the image, in degrees (default)
+
+              "arcminwidth", "amw", "aw"
+                     width of the image, in arcminutes
+
+              "arcsecperpix", "app"
+                     arcseconds per pixel
+
+              "focalmm"
+                     35-mm (width-based) equivalent focal length
+
+       -8, --parity pos/neg
+              Only check for matches with positive/negative parity (default: try both)
+
+       -c, --code-tolerance distance
+              Matching distance for quads (default: 0.01)
+
+       -E, --pixel-error pixels
+              For verification, size of pixel positional error (default: 1)
+
+       -q, --quad-size-min fraction
+              Minimum size of quads to try, as a fraction of the smaller image dimension, default: 0.1
+
+              Minimum size of quads to try, as a fraction of the smaller image dimension, default: 0.1
+
+       -Q, --quad-size-max fraction
+              Maximum size of quads to try, as a fraction of the image hypotenuse, default 1.0
+
+       --odds-to-tune-up odds
+              Odds ratio at which to try tuning up a match that isn't good enough to solve (default: 1e6)
+
+       --odds-to-solve odds
+              Odds ratio at which to consider a field solved (default: 1e9)
+
+       --odds-to-reject odds
+              Odds ratio at which to reject a hypothesis (default: 1e-100)
+
+       --odds-to-stop-looking odds
+              Odds ratio at which to stop adding stars when evaluating a hypothesis (default: HUGE_VAL)
+
+       --use-sextractor
+              Use SExtractor rather than built-in image2xy to find sources
+
+       --sextractor-config file
+              Use the given SExtractor config file. Note that CATALOG_NAME and CATALOG_TYPE values will be over-ridden by command-line values.  This option implies --use-sextractor.
+
+       --sextractor-path file
+              Use  the  given path to the SExtractor executable. Default: just 'sextractor', assumed to be in your PATH. Note that you can give command line args here too (but put them
+              in quotes), eg:
+
+              --sextractor-path 'sextractor -DETECT_TYPE CCD'.
+
+              This option implies --use-sextractor.
+
+       -3 RA, --ra RA
+              RA of field center for search, format: degrees or hh:mm:ss
+
+       -4 DEC, --dec DEC
+              DEC of field center for search, format: degrees or hh:mm:ss
+
+       -5 degrees, --radius degrees
+              Only search in indexes within 'radius' of the field center given by --ra and --dec
+
+       -d, --depth number or range
+              Number of field objects to look at, or range of numbers; 1 is the brightest star, so "-d 10" or "-d 1-10" mean look at the top ten brightest stars only.
+
+       --objs int
+              Cut the source list to have this many items (after sorting, if applicable).
+
+       -l, --cpulimit seconds
+              Give up solving after the specified number of seconds of CPU time
+
+       -r, --resort
+              Sort the star brightnesses by background-subtracted flux; the default is to sort using acompromise between background-subtracted and non-background-subtracted flux
+
+       -6, --extension int
+              FITS extension to read image from.
+
+       --invert
+              Invert the image (for black-on-white images)
+
+       -z, --downsample int
+              Downsample the image by factor int before running source extraction
+
+       --no-background-subtraction
+              Don't try to estimate a smoothly-varying sky background during source extraction.
+
+       --sigma float
+              Set the noise level in the image
+
+       -9, --no-remove-lines
+              Don't remove horizontal and vertical overdensities of sources.
+
+       --uniformize int
+              Select sources uniformly using roughly this many boxes (0=disable; default 10)
+
+       --no-verify-uniformize
+              Don't uniformize the field stars during verification
+
+       --no-verify-dedup
+              Don't deduplicate the field stars during verification
+
+       -0, --no-fix-sdss
+              Don't try to fix SDSS idR files.
+
+       -C, --cancel file
+              Filename whose creation signals the process to stop
+
+       -S, --solved file
+              Output file to mark that the solver succeeded
+
+       -I, --solved-in file
+              Input filename for solved file
+
+       -M, --match file
+              Output filename for match file
+
+       -R, --rdls file
+              Output filename for RDLS file
+
+       --sort-rdls column
+              Sort the RDLS file by this column; default is ascending; use "-column" to sort "column" in descending order instead.
+
+       --tag column
+              Grab tag-along column from index into RDLS file
+
+       --tag-all
+              Grab all tag-along columns from index into RDLS file
+
+       -j, --scamp-ref file
+              Output filename for SCAMP reference catalog
+
+       -B, --corr file
+              Output filename for correspondences
+
+       -W, --wcs file
+              Output filename for WCS file
+
+       -P, --pnm file
+              Save the PNM file as file
+
+       -k, --keep-xylist file
+              Save the (unaugmented) xylist to file
+
+       -A, --dont-augment
+              Quit after writing the unaugmented xylist
+
+       -V, --verify file
+              Try to verify an existing WCS file
+
+       --verify-ext extension
+		HDU from which to read WCS to verify; set this BEFORE --verify
+       -y, --no-verify
+              Ignore existing WCS headers in FITS input images
+
+       -g, --guess-scale
+              Try to guess the image scale from the FITS headers
+
+       --crpix-center
+              Set the WCS reference point to the image center
+
+       --crpix-x pix
+              Set the WCS reference point to the given position
+
+       --crpix-y pix
+              Set the WCS reference point to the given position
+
+       -T, --no-tweak
+              Don't fine-tune WCS by computing a SIP polynomial
+
+       -t, --tweak-order int
+              Polynomial order of SIP WCS corrections
+
+       -m, --temp-dir dir
+              Where to put temp files, default /tmp
+
+   The following options are valid for xylist inputs only:
+       -F, --fields number or range
+              The FITS extension(s) to solve, inclusive
+
+       -w, --width pixels
+              Specify the field width
+
+       -e, --height pixels
+              Specify the field height
+
+       -X, --x-column column-name
+              The FITS column containing the X coordinate of the sources
+
+       -Y, --y-column column-name
+              The FITS column containing the Y coordinate of the sources
+
+       -s, --sort-column column-name
+              The FITS column that should be used to sort the sources
+
+       -a, --sort-ascending
+              Sort in ascending order (smallest first); default is descending order
+
+       Note that most output files can be disabled by setting the filename to "none".  (If you have a sick sense of humour and you really want to name your output file "none", you  can
+       use "./none" instead.)
+
+AUTHOR
+       The Astrometry.net team. Principal investigators are David W. Hogg (NYU) and Dustin Lang (CMU).
+
+SEE ALSO
+       http://astrometry.net
