@@ -25,14 +25,20 @@
 engine_t * engine = NULL;
 solver_t * solver = NULL;
 
-#define M_PI 3.14159265358979323846
-#define DRL_Lat 39.952099 * M_PI / 180 // normal decimal latitude of DRL in radians
-#define DRL_Long -75.189507            // normal decimal longitude of DRL (west is -, east +)
+#define _USE_MATH_DEFINES
+#define DRL_Lat (39 + (57/60) + (7/3600)) * M_PI/180   // StarCam Room: 39.95166666666667 * M_PI / 180 // normal decimal latitude of DRL in radians
+#define DRL_Long -(75 + (11/60) + (18/3600))           // StarCam Room: -75.18944444444445      // normal decimal longitude of DRL (west is -, east +)
+#define UT_C0 67310.54841
+#define UT_C1 (876600.0*3600.0+8640184.812866)
+#define UT_C2 .093104
+#define UT_C3 (-6.2E-6)
+#define UT_A0 36525.0
 
 FILE * fptr;
 
 // create instance of astrometry parameters global structure, accessible from telemetry.c as well
 struct astro_params all_astro_params = {
+  .logodds = 1e7,
   .latitude = DRL_Lat,
   .longitude = DRL_Long,
   .ra = 0, 
@@ -42,22 +48,6 @@ struct astro_params all_astro_params = {
   .ir = 0,
   .alt = 0,
   .az = 0,
-//   .ha = 0, // included as field for help in passing proper information to calc_az() (hour angle)
-//   .current_focus = 0,
-//   .zero_focus_pos = 0,
-//   .max_focus_pos = 0,
-//   .focus_inf = 0,
-//   .max_aperture = 0,
-//   .current_aperture = 0,
-//   .spike_limit = 4.0, // how agressive is the dynamic hot pixel finder.  Small is more agressive
-//   .dynamic_hot_pixels = 0, // 0 == off, 1 == on
-//   .r_smooth = 2,   // image smooth filter radius [px]
-//   .high_pass_filter = 0, // 0 == off, 1 == on
-//   .r_high_pass_filter = 10, // image high pass filter radius [px]
-//   .centroid_search_border = 1, // distance from image edge from which to start looking for stars [px]
-//   .filter_return_image = 0, // 1 == true; 0 = false
-//   .n_sigma = 2.0, // pixels brighter than this time the noise in the filtered map are blobs (this number * sigma + mean)
-//   .unique_star_spacing = 15,
 };
 
 void init_astrometry() {
@@ -73,157 +63,130 @@ void close_astrometry() {
 	solver_free(solver);
 }
 
-int jday(int month, int day) {
-	/* Days in each month 1-12 */
-	int jday[] = {0,0,31,59,90,120,151,180,211,242,272,303,333 };
+double siderealtime(struct tm * info) { //, double exposure_time_ms) {
+	// initialize time variables and struct
+	double juldate, T_UT1;
+	double ThetaGMST;
+	// for printing purposes
+	char buff[100];
+	double exposure_time_ms = 0.0;
 
-	/* Determin decimal years from date */
-	return(jday[month]+day);
+
+	// compute the Julian date
+	int jd = (14 - (info->tm_mon + 1))/12;        // tm_mon from 0-11 not 1-12
+	int y = ((info->tm_year) + 1900) + 4800 - jd; // tm_year is years from 1900 not 0 (0 = 1 BC, 1 = 1 AD)
+	int m = (info->tm_mon + 1) + (12*jd) - 3;
+
+	// compute the Julian day	
+	jd = info->tm_mday + ((153*m + 2)/5) + (365*y) + (y/4) - (y/100) + (y/400) - 32045; 
+	juldate = jd + (((double) (info->tm_hour - 12 - info->tm_isdst))/24.0) + ((double) info->tm_min)/1440.0 + 
+	                ((double) info->tm_sec + (exposure_time_ms/2000.0))/86400.0;
+	printf("Julian date: %f\n", juldate);	
+	// compute UT1 value
+	T_UT1 = (juldate - 2451545.0)/UT_A0;
+	// conversion based on 3rd order expansion (online):
+	// http://www.mathworks.com/matlabcentral/fileexchange/26458-convert-right-ascension-and-declination-to-azimuth-and-elevation/content/RaDec2AzEl.m
+	ThetaGMST = UT_C0 + UT_C1*T_UT1 + UT_C2*(T_UT1*T_UT1) + UT_C3*(T_UT1*T_UT1*T_UT1);
+	ThetaGMST = fmod((fmod(ThetaGMST, 86400.0*(ThetaGMST/fabs(ThetaGMST)))/240.0), 360.0);
+
+	// compute the sidereal time
+	double LST = ThetaGMST + all_astro_params.longitude;
+	// get LST within proper bounds (shift by 360 degrees if necessary)
+	while (LST < 0) {
+			LST += 360;
+	}
+	while (LST > 360) {
+			LST -= 360;
+	}
+
+	strftime(buff, sizeof(buff), "%b %d %H:%M:%S", info); 
+ 	printf("GMT in siderealtime(), passed from doCameraAndAstrometry(): %s\n", buff); 
+
+	return (LST);
 }
 
-void calc_alt(struct astro_params * params, time_t rawtime) {
-	// access ra and dec fields from the astro_params struct and initialize variables for internal calculations
-    double dec = params->dec; // pointer for astro_params requires ->
-    double ra = params->ra;
+void calc_alt(struct astro_params * params, struct tm * info) {
+	// local variables
+	double ra = params->ra;
+	double dec = params->dec;
+	dec *= M_PI/180; // convert dec to radians
+	char datafile[100];
 
-    dec *= M_PI / 180;        // dec of saved image converted to radians
-    //time_t rawtime;
-    //time(&rawtime);
-    struct tm *info;
-    info = gmtime(&rawtime);
+	// for printing purposes
+	char buff[100];
 
-	int YEAR = info->tm_year + 1900;
-	int DAY = jday(info->tm_mon, info->tm_mday);
-	double HOUR = info->tm_hour + (info->tm_min/60.0) + (info->tm_sec/3600.0);
-
-	// ** current Julian date (actually add 2,400,000
-	// ** for true JD); LEAP = leap days since 1949;
-	// ** 32916.5 is midnite 0 jan 1949 minus 2.4e6
-	int DELTA = YEAR - 1949;
-	double LEAP = DELTA / 4;
-	double JD = 32916.5 + ((DELTA * 365.0) + LEAP + DAY) + HOUR / 24.0 +1;
-	// ** ecliptic coordinates
-	// ** 51545.0 + 2.4e6 = noon 1 jan 2000
-	double TIME = JD - 51545.0;
-	// ** Greenwich mean sidereal time in hours
-	double GMST = 6.697375 + 0.0657098242*TIME + HOUR;
-	
-	// ** Hour not changed to sidereal time since
-	// ** 'time' includes the fractional day
-	GMST = fmod( GMST, 24.0 );
-	if( GMST < 0.0 ){
-		GMST = GMST + 24.0;
-	}
-	// ** local mean sidereal time in radians
-	double LMST = GMST + (all_astro_params.longitude / 15.0);
-	LMST = fmod( LMST, 24.0 );
-	if( LMST < 0.0 ){
-	    LMST = LMST + 24.0;
-	}
-	printf("LMST is %f hours\n", LMST);
-	LMST = LMST*15.0;
-	printf("LMST is %f degrees\n", LMST);
-
-    // // calculate local siderial time (stargazing.net method)
-    // double lst = 100.46 + (0.985647 * totalTimeSince2000) + DRL_Long + (15 * decimalUT);
-    // while (lst > 360) {
-    //     lst -= 360; // to get within 360 degrees
-    // } 
-	// lst currently in degrees
-    // lst /= 15; // lst to hours
-    //lst *= 15; //lst to degrees
-
-	// alternative calculation of lst: LST = GST + longitude of observer
-	// lst = gst + DRL_Long;
+	// calculate local sidereal time (LST)
+	double LST = siderealtime(info);
+	strftime(buff, sizeof(buff), "%b %d %H:%M:%S", info); 
+	printf("GMT in calc_alt: %s\n", buff);
+	printf("LST is %f degrees using siderealtime() method in calc_alt().\n", LST);
+	strftime(datafile, sizeof(datafile), "/home/xscblast/Desktop/blastcam/data_%b-%d.txt", info); 
+	fptr = fopen(datafile, "a");
+	fprintf(fptr, "LST for this solution (corresponds to above GMT): %f\n", LST);
+	fclose(fptr);
+	memset(buff, 0, sizeof(buff));
 
     // find hour angle
-    double ha = LMST - ra;
-    if (ha < 0) {
+    double ha = LST - ra;
+    while (ha < 0) {
         ha += 360;
     }
-    ha *= M_PI / 180; // convert to radians
+	while (ha > 360) {
+		ha -= 360;
+	}
+    ha *= M_PI / 180; // convert ha to radians
 
+	// calculate the altitude 
     double alt = asin((sin(all_astro_params.latitude) * sin(dec)) + (cos(all_astro_params.latitude) * cos(dec) * cos(ha)));
-    alt *= 180 / M_PI; // convert to degrees
+    alt *= 180 / M_PI; // convert alt to degrees
 
+	// update altitude field in global astro struct
 	all_astro_params.alt = alt;
-	// all_astro_params.ha = ha;
-
-	//return alt;
 }
 
-void calc_az(struct astro_params * params, time_t rawtime) {
-    double dec = params->dec; // pointer for astro_params requires ->
+void calc_az(struct astro_params * params, struct tm * info) {
+	// define local variables
+    double dec = params->dec; 
     double ra = params->ra;
-
-	// double altitude = params->alt;
-	// double ha = params->ha;
-
-    //time_t rawtime;
-    //time(&rawtime);
-    struct tm *info;
-    info = gmtime(&rawtime);
-    int currentHour = info->tm_hour;
-    int currentMinute = info->tm_min;
-    int currentSecond = info->tm_sec;
-	// printf("%d\n", currentSecond);
-    //rawtime = time(NULL);
-    int daysSinceEpoch1970 = rawtime/(60*60*24);
-    double daysBetween1970and2000 = 10957 + .5; // .5 is added because epoch 2000 starts at midday 1/1/2000
-    double daysSince2000 = daysSinceEpoch1970 - daysBetween1970and2000;
-    double decimalUT = currentHour + (currentMinute / 60.0) + (currentSecond / 3600.0); //.0 makes double
-
-    double totalTimeSince2000 = daysSince2000 + (decimalUT / 24);
-
-    // calculate local siderial time
-    double lst = 100.46 + (.985647 * totalTimeSince2000) + all_astro_params.longitude + (15 * decimalUT);
-    while (lst > 360) {
-        lst -= 360; // to get within 360 degrees
-    } 
-	// lst currently in degrees
-    lst /= 15; // lst to hours // 
-	printf("%f hours\n", lst);
-    // lst *= 15; // lst to degrees
+	double AZ;
+	
+	// calculate sidereal time (should be synchronized with LST in calc_alt())
+	double LST = siderealtime(info);
 
     // find hour angle
-    double ha = lst - ra;
-    if (ha < 0) {
+    double ha = LST - ra;
+    while (ha < 0) {
         ha += 360;
     }
-	printf("ra: %f\n", ra);
-	printf("hour angle: %f\n", ha);
-    ha *= M_PI / 180; // convert to radians
+	while (ha > 360) {
+		ha -= 360;
+	}
+    ha *= M_PI / 180; // convert ha to radians
 
-    double alt = asin((sin(all_astro_params.latitude) * sin(dec)) + (cos(all_astro_params.latitude) * cos(dec) * cos(ha)));
-    alt *= 180 / M_PI; // convert to degrees
-    alt *= M_PI / 180; // convert input altitude to radians
+    double A = acos((sin(dec * M_PI/180) - (sin(all_astro_params.alt * M_PI/180) * sin(all_astro_params.latitude))) / 
+	                (cos(all_astro_params.alt * M_PI/180) * cos(all_astro_params.latitude)));
+    A *= 180 / M_PI; // convert A to degrees
 
-    double A = acos((sin(dec) - (sin(alt) * sin(all_astro_params.latitude))) / (cos(alt) * cos(all_astro_params.latitude)));
-    A *= 180 / M_PI; // convert to degrees
-    double AZ;
-    double sinHA = sin(ha);
-    sinHA *= M_PI / 180; // convert to degrees
-	if (sinHA < 0) {
+	if (sin(ha) < 0) {
         AZ = A;
     } else {
         AZ = 360 - A;
     } 
-	
+	// update azimuth field in global astro params struct
 	all_astro_params.az = AZ;
-    //return AZ;
 }
 
-// this is the function to call for solving :)  
-int lost_in_space_astrometry(double * starX, double * starY, double * starMag, unsigned numBlobs, time_t rawtime) {
+// this is the function to call for solving 
+int lost_in_space_astrometry(double * starX, double * starY, double * starMag, unsigned numBlobs, struct tm * tm_info, char * datafile) {
 	double ra, dec, fr, ps, ir;
+	// localize some struct values for ease of calculations (will update at end of function)
 	ra = all_astro_params.ra;
 	dec = all_astro_params.dec;
 	fr = all_astro_params.fr; 
 	ps = all_astro_params.ps;
 	ir = all_astro_params.ir;
-
 	// create timer
-	int msec = 0, trigger = 5000; /* ms */
+	int msec = 0, trigger = 5000; // in milliseconds
 	clock_t before = clock();
  	clock_t difference = clock() - before;
 	msec = difference * 1000/CLOCKS_PER_SEC;
@@ -244,7 +207,7 @@ int lost_in_space_astrometry(double * starX, double * starY, double * starMag, u
 	// only PARITY_BOTH seems to work maybe?
 	
 	// sets the odds ratio we will accept
-	solver_set_keep_logodds(solver, log(1e6));
+	solver_set_keep_logodds(solver, log(all_astro_params.logodds));  // previously 1e6 // now user-commandable
 
 	solver->logratio_totune = log(1e6);
 	solver->logratio_toprint = log(1e6);
@@ -266,11 +229,10 @@ int lost_in_space_astrometry(double * starX, double * starY, double * starMag, u
 	solver_set_field_bounds(solver, 0, CAMERA_WIDTH - 2*CAMERA_MARGIN, 0, CAMERA_HEIGHT - 2*CAMERA_MARGIN);
 
 	// add index files that are close to the guess for the target
-	// int i = 0;
-	// while(i < (int)pl_size((*engine).indexes) && diff > 0)
 	for (int i = 0; i < (int)pl_size((*engine).indexes); i++) {
-		index_t* index = (index_t*) pl_get((*engine).indexes, i);
-		if (i%10 == 0) { // check timeout
+		index_t * index = (index_t*) pl_get((*engine).indexes, i);
+		// check the Astrometry timeout
+		if (i % 10 == 0) { 
 			difference = clock() - before;
   			msec = difference * 1000/CLOCKS_PER_SEC;
   			diff = trigger - msec;
@@ -299,33 +261,36 @@ int lost_in_space_astrometry(double * starX, double * starY, double * starMag, u
 
 		wcs = &((*solver).best_match.wcstan);
 		tan_pixelxy2radec(wcs, (CAMERA_WIDTH - 2*CAMERA_MARGIN - 1)/2.0, (CAMERA_HEIGHT - 2*CAMERA_MARGIN - 1)/2.0, &ra, &dec);
-		printf("ra within lost_in_space: %f\n", ra);
+		// calculate pixel scale and field rotation
 		ps = tan_pixel_scale(wcs);
 		fr = tan_get_orientation(wcs); 
 	
-		// update parameters in astrometry global structure for telemetry.c
+		// update parameters in astrometry global structure
 		all_astro_params.ra = ra;
 		all_astro_params.dec = dec;
 		all_astro_params.fr = fr;
 		all_astro_params.ps = ps;
 
-		//double alt_to_print = calc_alt(&all_astro_params, rawtime);
-		//double az_to_print = calc_az(&all_astro_params, rawtime);
-		calc_alt(&all_astro_params, rawtime);
-		calc_az(&all_astro_params, rawtime);
+		// calculate altitude and azimuth
+		calc_alt(&all_astro_params, tm_info);
+		calc_az(&all_astro_params, tm_info);
 		all_astro_params.ir = 15.04106858*cos(all_astro_params.az)*cos(all_astro_params.az);
-		printf("lost_in_space_astrometry solution found at ra %lf, dec %lf, fr %f, pixel scale %lf, alt %lf, az %lf, ir %lf.\n", 
+		printf("Astrometry: RA %lf | DEC %lf | FR %f | PS %lf | ALT %lf | AZ %lf | IR %lf\n", 
 		        all_astro_params.ra, all_astro_params.dec, all_astro_params.fr, all_astro_params.ps, all_astro_params.alt, 
 				all_astro_params.az, all_astro_params.ir);
-		fptr = fopen("/home/xscblast/Desktop/blastcam/data.txt", "a");
-		fprintf(fptr, "lost_in_space_astrometry solution found at ra %lf, dec %lf, fr %f, pixel scale %lf, alt %lf, az %lf, ir %lf.\n", 
-		        all_astro_params.ra, all_astro_params.dec, all_astro_params.fr, all_astro_params.ps, all_astro_params.alt, 
-				all_astro_params.az, all_astro_params.ir);
+		// calculate how long solution takes to solve
 		difference = clock() - before;
   		msec = difference * 1000/CLOCKS_PER_SEC;
   		diff = trigger - msec;
 		int completion = 5000 - diff;
 		printf("Solved in %d msec.\n", completion);
+		// write astrometry solution to data.txt file
+		printf("Writing astrometry solution to data file...\n");
+		fptr = fopen(datafile, "a");
+		fprintf(fptr, "Astrometry: RA %lf | DEC %lf | FR %lf | PS %lf | ALT %lf | AZ %lf | IR %lf\nSolved in %d msec.\n", 
+		        all_astro_params.ra, all_astro_params.dec, all_astro_params.fr, all_astro_params.ps, all_astro_params.alt, 
+				all_astro_params.az, all_astro_params.ir, completion);
+		fclose(fptr); // close the file
 		ret = 1;
 	} 
 

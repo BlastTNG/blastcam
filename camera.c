@@ -25,12 +25,6 @@
 #include "astrometry.h"
 #include "commands.h"
 
-// for photo testing
-const int fileHeaderSize = 14;
-const int infoHeaderSize = 40;
-
-/* NOTE: needs to be cleaned up. */
-
 // define some functions for sorting blobs later
 void merge (double A[], int p, int q, int r, double X[],double Y[]);
 void part (double A[], int p, int r, double X[], double Y[]);
@@ -38,53 +32,118 @@ void part (double A[], int p, int r, double X[], double Y[]);
 #define TRUE  1
 #define FALSE 0
 
-HIDS cameraHandle = 12;  // set by ueyesetid
+HIDS cameraHandle = 12;         // set by ueyesetid
 IS_POINT_2D locationRectangle;
+IMAGE_FILE_PARAMS ImageFileParams;
+FILE * fptr;
 
 int bufferNumber = 0;
-char* memory = NULL;
-char* waitingMem = NULL;
+char * memory = NULL;
+char * waitingMem = NULL;
+int status;                     // variable to verify completion of methods
+extern int shutting_down;
+extern int camera_is_shutdown;
+unsigned char * mask = NULL;
+int first_run = 1;              // for file set-up purposes
+char * memoryStartingPointer;
+int memoryId;
 
-IMAGE_FILE_PARAMS ImageFileParams;
+// initialize global struct for blob parameters with default values
+struct blob_params all_blob_params = {
+  .spike_limit = 4, // how agressive is the dynamic hot pixel finder.  Small is more agressive
+  .dynamic_hot_pixels = 0, // 0 == off, 1 == on
+  .r_smooth = 2,   // image smooth filter radius [px]
+  .high_pass_filter = 0, // 0 == off, 1 == on
+  .r_high_pass_filter = 10, // image high pass filter radius [px]
+  .centroid_search_border = 1, // distance from image edge from which to start looking for stars [px]
+  .filter_return_image = 0, // 1 == true; 0 = false
+  .n_sigma = 2.0, // pixels brighter than this time the noise in the filtered map are blobs (this number * sigma + mean)
+  .unique_star_spacing = 15,
+};
 
-int status; //variable to verify completion of methods
+// function to determine if the current year is a leap year (2020 is a leap year)
+int isLeapYear(int year) {
+  if (year % 4 != 0) {
+    return false;
+  } else if (year % 400 == 0) {
+    return true;
+  } else if (year % 100 == 0) {
+    return false;
+  } else {
+    return true;
+  }
+}
 
+// initialize the camera
 void init_camera() {
+  double min_exposure;
+  double max_exposure;
+  double exposure_step_size;
+  double current_exposure;
+
   // load the camera parameters
   load_camera();
+
   // set exposure time min .03 ms, currently can't go above 150 but max should be 998 ms
-	double exposure = 300; // NOTE: test alternative values
-  status = is_Exposure(cameraHandle, IS_EXPOSURE_CMD_SET_EXPOSURE, (void * ) &exposure, sizeof(double));
+	double exposure = 50; // NOTE: test alternative values
+  unsigned int enable = 1; // enable long exposures
+  status = is_Exposure(cameraHandle, IS_EXPOSURE_CMD_SET_EXPOSURE, (void *) &exposure, sizeof(double));
+  status = is_Exposure(cameraHandle, IS_EXPOSURE_CMD_SET_LONG_EXPOSURE_ENABLE, (void *) &enable, sizeof(unsigned int));
+  status = is_Exposure(cameraHandle, IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE_MIN, &min_exposure, sizeof(double));
+  status = is_Exposure(cameraHandle, IS_EXPOSURE_CMD_GET_EXPOSURE, &current_exposure, sizeof(double));
+  status = is_Exposure(cameraHandle, IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE_MAX, &max_exposure, sizeof(double));
+  
 	if (status != IS_SUCCESS) {
 		printf("Set exposure time fails.\n");
-	}
+	} else {
+    printf("Exposure time: %f msec\n", exposure);
+    printf("Min possible exposure time: %f msec\n", min_exposure);
+    printf("Max possible exposure time: %f msec\n", max_exposure);
+  }
+
+  // status = is_GetExposureRange(cameraHandle, min_exposure, max_exposure, exposure_step_size);
+  // if (status != IS_SUCCESS) {
+  //   printf("Getting exposure information fails.\n");
+  // } else {
+  //   printf("Camera's minimum exposure with current settings is %f and maximum exposure is %f. The step size is %f.\n", 
+  //          *min_exposure, *max_exposure, *exposure_step_size);
+  // }
+
 	// initializes astrometry
   init_astrometry();
+
   // sets save image params
 	saveImage();
 }
 
+// cleaning_up function for ctrl+c exception
 void clean_up() {
     printf("\ncommands.c terminated, performing clean-up.\n");
+    shutting_down = 1;
+    while (!camera_is_shutdown) usleep(10000);
+    is_FreeImageMem(cameraHandle, memoryStartingPointer, memoryId);
     is_ExitCamera(cameraHandle);
     exit(0);
 }
 
-//sets starting values for certain camera atributes
+// sets starting values for certain camera atributes
 void set_camera_params(unsigned int cameraHandle) {
-	/*int delay =*/ is_SetTriggerDelay(IS_GET_TRIGGER_DELAY, 0);
+	is_SetTriggerDelay(IS_GET_TRIGGER_DELAY, 0);
 
+  // set camera integrated amplifier 
   status = is_SetHardwareGain(cameraHandle, 0, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER);
   if (status != IS_SUCCESS) {
     printf("Setting gain failed.\n");
   }
 
+  // disable camera's auto gain
   double autoGain = 0;
   status = is_SetAutoParameter(cameraHandle, IS_SET_ENABLE_AUTO_GAIN, &autoGain, NULL);
   if (status != IS_SUCCESS) {
     printf("Disabling auto gain fails.\n");
   }
 
+  // set camera's gamma value 
   status = is_SetHardwareGamma(cameraHandle, IS_SET_HW_GAMMA_OFF);
   if (status != IS_SUCCESS) {
     printf("Disabling hardware gamma corection fails.\n");
@@ -138,80 +197,78 @@ void set_camera_params(unsigned int cameraHandle) {
   if (status != IS_SUCCESS) {
     printf("Setting trigger timeout fails with status %d.\n", status);
   }
+
+  // binning control
+  // status = is_SetBinning(cameraHandle, IS_GET_BINNING); // try this during next round of testing.
+
 }
 
-int load_camera(){
-
+// load the camera
+int load_camera() {
   SENSORINFO sensorInfo;
-  
   int status;	
-  // printf("LOADING CAMERA\n");
 
   // initialize camera
 	if ((status = is_InitCamera(&cameraHandle, NULL)) != IS_SUCCESS){
-    printf("Camera initialization failed\n");
+    printf("Camera initialization failed, error number: %d\n", errno);
     exit(2);
 	}
   
   // get sensor info
 	if ((status = is_GetSensorInfo(cameraHandle, &sensorInfo)) != IS_SUCCESS) {
-    printf("failed to Receive camera sensor info\n");
+    printf("Failed to receive camera sensor information.\n");
     exit(2);
 	}
 
 	set_camera_params(cameraHandle);
 
   // set display mode
-	if ((status = is_SetColorMode (cameraHandle, IS_CM_SENSOR_RAW8)) != IS_SUCCESS) {
-    printf("Setting display mode failed\n");
+	if ((status = is_SetColorMode(cameraHandle, IS_CM_SENSOR_RAW8)) != IS_SUCCESS) {
+    printf("Setting display mode failed.\n");
     exit(2);
 	}
  	
   // allocate camera memory
-	char* memoryStartingPointer;
-	int memoryId;
-	int colourDepth = 8; // versus 8? Originally 8 so should change back if this causes errors
+	int colourDepth = 8; 
 	if ((status = is_AllocImageMem(cameraHandle, sensorInfo.nMaxWidth, 
-  sensorInfo.nMaxHeight, colourDepth, &memoryStartingPointer, &memoryId)) != IS_SUCCESS)
-	{
-		printf("Allocating camera memory failed\n");
+  sensorInfo.nMaxHeight, colourDepth, &memoryStartingPointer, &memoryId)) != IS_SUCCESS) {
+		printf("Allocating camera memory failed.\n");
     exit(2);
 	}
 
   // set memory for image
-	if ((status = is_SetImageMem(cameraHandle, memoryStartingPointer, memoryId)) != IS_SUCCESS){
-    printf("Setting memory to active failed\n");
+	if ((status = is_SetImageMem(cameraHandle, memoryStartingPointer, memoryId)) != IS_SUCCESS) {
+    printf("Setting memory to active failed.\n");
     exit(2);
   }
 
   // get image memory
-	void* activeMemoryLocation;
+	void * activeMemoryLocation;
 	if ((status = is_GetImageMem(cameraHandle, &activeMemoryLocation)) != IS_SUCCESS) {
-    printf("Getting image memory failed\n");
+    printf("Getting image memory failed.\n");
     exit(2);
   }
 
-
   // how clear images can be is affected by pixelclock and fps 
   int pixelclock = 30;
-	if ((status = is_PixelClock(cameraHandle, IS_PIXELCLOCK_CMD_SET, (void*)&pixelclock, 
-  sizeof(pixelclock))) != IS_SUCCESS) {
+	if ((status = is_PixelClock(cameraHandle, IS_PIXELCLOCK_CMD_SET, (void*) &pixelclock, sizeof(pixelclock))) != IS_SUCCESS) {
     printf("Pixel Clock failed to set\n");
     exit(2);
   }
 
 	double newFPS = 10;
-	if ((status = is_SetFrameRate(cameraHandle, IS_GET_FRAMERATE, (void*)&newFPS)) != IS_SUCCESS) {
-    printf("Framerate failed to set\n");
+	if ((status = is_SetFrameRate(cameraHandle, IS_GET_FRAMERATE, (void*) &newFPS)) != IS_SUCCESS) {
+    printf("Framerate failed to set.\n");
     exit(2);
   }
 
   // set trigger
-	if ((status = is_SetExternalTrigger (cameraHandle, IS_SET_TRIGGER_SOFTWARE)) != IS_SUCCESS) {
-    printf("trigger failed to set\n");
+	if ((status = is_SetExternalTrigger(cameraHandle, IS_SET_TRIGGER_SOFTWARE)) != IS_SUCCESS) {
+    printf("Trigger failed to set.\n");
     exit(2);
 	}
-  printf("Done initing camera\n");
+
+  printf("Done initializing camera.\n");
 }
 
 // save image as bmp 
@@ -223,27 +280,10 @@ int saveImage(){
     ImageFileParams.nFileType = IS_IMG_BMP;
 }
 
-// struct with default values
-struct blob_params all_blob_params = {
-  .spike_limit = 4, // how agressive is the dynamic hot pixel finder.  Small is more agressive
-  .dynamic_hot_pixels = 0, // 0 == off, 1 == on
-  .r_smooth = 2,   // image smooth filter radius [px]
-  .high_pass_filter = 0, // 0 == off, 1 == on
-  .r_high_pass_filter = 10, // image high pass filter radius [px]
-  .centroid_search_border = 1, // distance from image edge from which to start looking for stars [px]
-  .filter_return_image = 0, // 1 == true; 0 = false
-  .n_sigma = 2.0, // pixels brighter than this time the noise in the filtered map are blobs (this number * sigma + mean)
-  .unique_star_spacing = 15,
-};
-
-unsigned char *mask = NULL;
-
-// not entirely sure what a mask is (look into this)
-void makeMask(char *ib, int i0, int j0, int i1, int j1, int x0, int y0, bool subframe) {
+void makeMask(char * ib, int i0, int j0, int i1, int j1, int x0, int y0, bool subframe) {
   static int first_time = 1;
 
   if (first_time) {
-    // printf("called mask for the first time\n");
     mask = calloc(CAMERA_WIDTH*CAMERA_HEIGHT, 1);
     first_time = 0;
   }
@@ -254,11 +294,12 @@ void makeMask(char *ib, int i0, int j0, int i1, int j1, int x0, int y0, bool sub
   
   int cutoff = all_blob_params.spike_limit*100.0;
 
-  for (i=i0; i<i1; i++) {
-    mask[i+ CAMERA_WIDTH*j0] = mask[i + (j1-1)*CAMERA_WIDTH] = 0;
+  for (i = i0; i < i1; i++) {
+    mask[i + CAMERA_WIDTH*j0] = mask[i + (j1-1)*CAMERA_WIDTH] = 0;
   }
-  for (j=j0; j<j1; j++) {
-    mask[i0+j*CAMERA_WIDTH] = mask[i1-1 + j*CAMERA_WIDTH] = 0;
+
+  for (j = j0; j < j1; j++) {
+    mask[i0 + j*CAMERA_WIDTH] = mask[i1-1 + j*CAMERA_WIDTH] = 0;
   }
 
   i0++;
@@ -266,36 +307,32 @@ void makeMask(char *ib, int i0, int j0, int i1, int j1, int x0, int y0, bool sub
   i1--;
   j1--;
   
-  
   if (all_blob_params.dynamic_hot_pixels) {
     int nhp = 0;
-    for (j = j0; j<j1; j++) {
-      for (i=i0; i<i1; i++) {
-        p0 = 100*ib[i+j*CAMERA_WIDTH]/cutoff;
-        p1 = ib[i-1+(j)*CAMERA_WIDTH];
-        p2 = ib[i+1+(j)*CAMERA_WIDTH];
-        p3 = ib[i+(j+1)*CAMERA_WIDTH];
-        p4 = ib[i+(j-1)*CAMERA_WIDTH];
-        a = p1+p2+p3+p4+4;
-        p1 = ib[i-1+(j-1)*CAMERA_WIDTH];
-        p2 = ib[i+1+(j+1)*CAMERA_WIDTH];
-        p3 = ib[i-1+(j+1)*CAMERA_WIDTH];
-        p4 = ib[i+1+(j-1)*CAMERA_WIDTH];
-        b = p1+p2+p3+p4+4;
-        mask[i+j*CAMERA_WIDTH] = ((p0 < a) && (p0 < b));
-        if (p0>a || p0 > b) nhp++;
+    for (j = j0; j < j1; j++) {
+      for (i = i0; i < i1; i++) {
+        p0 = 100*ib[i + j*CAMERA_WIDTH]/cutoff;
+        p1 = ib[i - 1 + (j)*CAMERA_WIDTH];
+        p2 = ib[i + 1 + (j)*CAMERA_WIDTH];
+        p3 = ib[i + (j+1)*CAMERA_WIDTH];
+        p4 = ib[i + (j-1)*CAMERA_WIDTH];
+        a = p1 + p2 + p3 + p4 + 4;
+        p1 = ib[i - 1 + (j-1)*CAMERA_WIDTH];
+        p2 = ib[i + 1 + (j+1)*CAMERA_WIDTH];
+        p3 = ib[i - 1 + (j+1)*CAMERA_WIDTH];
+        p4 = ib[i + 1 + (j-1)*CAMERA_WIDTH];
+        b = p1 + p2 + p3 + p4 + 4;
+        mask[i + j*CAMERA_WIDTH] = ((p0 < a) && (p0 < b));
+        if (p0 > a || p0 > b) nhp++;
       }
     }
-    //printf("Dynamic hot pixels (%d)\n", nhp);
   } else {
-    // printf("Dynamic hot pixels are off\n");
-    for (j = j0; j<j1; j++) {
-      for (i=i0; i<i1; i++) {
-        mask[i+j*CAMERA_WIDTH] = 1;
+    for (j = j0; j < j1; j++) {
+      for (i = i0; i < i1; i++) {
+        mask[i + j*CAMERA_WIDTH] = 1;
       }
     }
   }
-
 /*
   // TODO: decide if we want a static hot pixel map
   if (use_hpList) {
@@ -318,11 +355,9 @@ void makeMask(char *ib, int i0, int j0, int i1, int j1, int x0, int y0, bool sub
 */
 }
 
-//read comment above mask
-void boxcarFilterImage(char *ib, int i0, int j0, int i1, int j1, int r_f, double *filtered_image) {
-
+void boxcarFilterImage(char * ib, int i0, int j0, int i1, int j1, int r_f, double * filtered_image) {
   static int first_time = 1;
-  static char *nc = NULL;
+  static char * nc = NULL;
   static uint64_t * ibc1 = NULL;
 
   if (first_time) {
@@ -331,63 +366,65 @@ void boxcarFilterImage(char *ib, int i0, int j0, int i1, int j1, int r_f, double
     first_time = 0;
   }
 
-  //printf("in boxcar filter, w = %d, h = %d, r_f = %d\n", w, h, r_f);
   int b = r_f;
   int64_t isx;
   int s, n;
   double ds, dn;
-  double last_ds=0;
+  double last_ds = 0;
 
-  for (int j = j0; j<j1; j++) {
+  for (int j = j0; j < j1; j++) {
     n = 0;
     isx = 0;
-    for (int i = i0; i<i0+2*r_f+1; i++) {
-      n += mask[i+j*CAMERA_WIDTH];
-      isx += ib[i+j*CAMERA_WIDTH]*mask[i+j*CAMERA_WIDTH];
+    for (int i = i0; i < i0 + 2*r_f + 1; i++) {
+      n += mask[i + j*CAMERA_WIDTH];
+      isx += ib[i + j*CAMERA_WIDTH]*mask[i + j*CAMERA_WIDTH];
     }
-    int idx = CAMERA_WIDTH*j+i0+r_f;
-    //int iN = i1-r_f-1;
-    for (int i=r_f+i0; i<i1-r_f-1; i++) {
+
+    int idx = CAMERA_WIDTH*j + i0 + r_f;
+
+    for (int i = r_f + i0; i < i1 - r_f - 1; i++) {
       ibc1[idx] = isx;
       nc[idx] = n;
-      isx = isx + mask[idx+r_f+1]*ib[idx+r_f+1] - mask[idx-r_f]*ib[idx-r_f];
-      n = n + mask[idx+r_f+1] - mask[idx-r_f];
+      isx = isx + mask[idx + r_f + 1]*ib[idx + r_f + 1] - mask[idx - r_f]*ib[idx - r_f];
+      n = n + mask[idx + r_f + 1] - mask[idx - r_f];
       idx++;
     }
+
     ibc1[idx] = isx;
     nc[idx] = n;
+
   }
 
-  for (int j = j0+b; j<j1-b; j++) {
-    for (int i=i0+b; i<i1-b; i++) {
+  for (int j = j0+b; j < j1-b; j++) {
+    for (int i = i0+b; i < i1-b; i++) {
       n = s = 0;
-      for (int jp=-r_f; jp<=r_f; jp++) {
+      for (int jp =- r_f; jp <= r_f; jp++) {
         int idx = i + (j+jp)*CAMERA_WIDTH;
         s += ibc1[idx];
         n += nc[idx];
       }
       ds = s;
       dn = n;
-      if (dn>0.0) {
-        ds/=dn;
+      if (dn > 0.0) {
+        ds /= dn;
         last_ds = ds;
       } else {
         ds = last_ds;
       }
 
-      filtered_image[i+j*CAMERA_WIDTH] = ds;
+      filtered_image[i + j*CAMERA_WIDTH] = ds;
     }
   }
 }
 
-int get_blobs(char *input_buffer, int w, int h, double ** starX, double ** starY, double ** starMag, char* output_buffer) {
+int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** starY, double ** starMag, char * output_buffer) {
   static int first_time = 1;
   static double * ic = NULL;
   static double * ic2 = NULL;
   static int num_blobs_alloc = 0;
 
-	//create timer
-	int msec = 0, trigger = 60000; /* ms */
+	// create timer
+	int msec = 0, trigger = 60000; // ms
 	clock_t before = clock();
  	clock_t difference = clock() - before;
 	msec = difference  * 1000/CLOCKS_PER_SEC;
@@ -395,7 +432,6 @@ int get_blobs(char *input_buffer, int w, int h, double ** starX, double ** starY
 
   difference = clock() - before;
   msec = difference * 1000/CLOCKS_PER_SEC;
-   //printf("%d\n",msec);
 
   // allocate the proper amount of storage space to start
   if (first_time) {
@@ -404,8 +440,7 @@ int get_blobs(char *input_buffer, int w, int h, double ** starX, double ** starY
     first_time = 0;
   }
   
-  // we use half-width internally, but the api gives us
-  // full width.
+  // we use half-width internally, but the api gives us full width.
   int x_size = w/2;
   int y_size = h/2;
 
@@ -428,11 +463,9 @@ int get_blobs(char *input_buffer, int w, int h, double ** starX, double ** starY
   printf("\n");
 */
 
-
-
-  double sx=0, sx2=0;
+  double sx = 0, sx2 = 0;
   double sx_raw = 0; // sum of non-highpass filtered field
-  int num_pix=0;
+  int num_pix = 0;
 
   // lowpass filter the image - reduce noise.
   boxcarFilterImage(input_buffer, i0, j0, i1, j1, all_blob_params.r_smooth, ic);
@@ -445,27 +478,24 @@ int get_blobs(char *input_buffer, int w, int h, double ** starX, double ** starY
   printf("\n");
 */
 
-  
   if (all_blob_params.high_pass_filter) { // only high-pass filter full frames
-    //fprintf (stderr, "hp filter active\n");
     b += all_blob_params.r_high_pass_filter;
     boxcarFilterImage(input_buffer, i0, j0, i1, j1, all_blob_params.r_high_pass_filter, ic2);
 
-    for (int j = j0+b; j<j1-b; j++) {
-      for (int i = i0+b; i<i1-b; i++) {
-        int idx = i+j*w;
+    for (int j = j0+b; j < j1-b; j++) {
+      for (int i = i0+b; i < i1-b; i++) {
+        int idx = i + j*w;
         sx_raw += ic[idx]*mask[idx];
         ic[idx] -= ic2[idx];
         sx += ic[idx]*mask[idx];
         sx2 += ic[idx]*ic[idx]*mask[idx];
         num_pix += mask[idx];
-        
       }
     }
   } else {
-    for (int j = j0+b; j<j1-b; j++) {
-      for (int i = i0+b; i<i1-b; i++) {
-        int idx = i+j*w;
+    for (int j = j0+b; j < j1-b; j++) {
+      for (int i = i0+b; i < i1-b; i++) {
+        int idx = i + j*w;
         sx += ic[idx]*mask[idx];
         sx2 += ic[idx]*ic[idx]*mask[idx];
         num_pix += mask[idx];
@@ -478,61 +508,55 @@ int get_blobs(char *input_buffer, int w, int h, double ** starX, double ** starY
   double mean_raw = sx_raw/num_pix;
 
   double sigma = sqrt((sx2 - sx*sx/num_pix)/num_pix);
-  // fprintf(stdout,"sigma: %g mean: %g num_pix: %d sx: %f sx2: %f\n", sigma, mean, num_pix, sx, sx2);
 
-  /*** fill output buffer if the variable is defined ***/
+  // fill output buffer if the variable is defined 
   if (output_buffer) {
     int pixel_offset = 0;
     if (all_blob_params.high_pass_filter) pixel_offset = 50;
 
     if (all_blob_params.filter_return_image) {
-      for (int j = j0+1; j<j1-1; j++) {
-        for (int i=i0+1; i<i1-1; i++) {
-          output_buffer[i+j*w] = ic[i+j*w]+pixel_offset;
+      for (int j = j0+1; j < j1-1; j++) {
+        for (int i = i0+1; i < i1-1; i++) {
+          output_buffer[i + j*w] = ic[i + j*w]+pixel_offset;
         }
       }
-      for (int j=0; j<b; j++) {
-        for (int i=i0; i<i1; i++) {
-          output_buffer[i+(j+j0)*w] = output_buffer[i + (j1-j-1)*w] = mean+pixel_offset;
+      for (int j = 0; j < b; j++) {
+        for (int i = i0; i < i1; i++) {
+          output_buffer[i + (j + j0)*w] = output_buffer[i + (j1 - j - 1)*w] = mean+pixel_offset;
         }
       }
-      for (int j=j0; j<j1; j++) {
-        for (int i=0; i<b; i++) {
-          output_buffer[i+i0+j*w] = output_buffer[i1-i-1 + j*w] = mean+pixel_offset;
+      for (int j = j0; j < j1; j++) {
+        for (int i = 0; i < b; i++) {
+          output_buffer[i + i0 + j*w] = output_buffer[i1 - i - 1 + j*w] = mean+pixel_offset;
         }
       }
     } else {
-      for (int j=j0; j<j1; j++) {
-        for (int i=i0; i<i1; i++) {
-          int idx = i+j*w;
+      for (int j = j0; j < j1; j++) {
+        for (int i = i0; i < i1; i++) {
+          int idx = i + j*w;
           output_buffer[idx] = input_buffer[idx];
         }
       }
     }
   }
 
-  /*** Find the blobs ***/
+  // Find the blobs 
   double ic0;
   int blob_count = 0;
-  for (int j = j0+b; j<j1-b-1; j++) {
-    for (int i=i0+b; i<i1-b-1; i++) {
-
-     
+  for (int j = j0+b; j < j1-b-1; j++) {
+    for (int i = i0+b; i < i1-b-1; i++) {
 		    difference = clock() - before;
         msec = difference  * 1000/ CLOCKS_PER_SEC;		      
-        diff = trigger-msec;
-  			// printf("%d\n",diff);
-			  if(diff < 0){
-				  printf("BLOBFINDER timeout!!!!\n");
+        diff = trigger - msec;
+			  if(diff < 0) {
+				  printf("Blob-finder timed out!\n");
 				  return 0;
 			  }
 	    
-
-
       // if pixel exceeds threshold
-      if (((double)ic[i+j*w] > mean + all_blob_params.n_sigma*sigma) || ((double)ic[i+j*w] > 254) || 
-      /* this is pretty arbitrary. its purely based on the normal value for dark sky being 6 or 7 -->*/ ((double)ic[i+j*w]>7)) {
-        ic0 = ic[i+j*w];
+      if (((double) ic[i + j*w] > mean + all_blob_params.n_sigma*sigma) || ((double) ic[i + j*w] > 254) || 
+      /* this is pretty arbitrary. its purely based on the normal value for dark sky being 6 or 7 -->*/ ((double) ic[i + j*w] > 7)) {
+        ic0 = ic[i + j*w];
         // If pixel is a local maximum or saturated
         if (((ic0 >= ic[i-1 + (j-1)*w]) &&
              (ic0 >= ic[i   + (j-1)*w]) &&
@@ -542,30 +566,28 @@ int get_blobs(char *input_buffer, int w, int h, double ** starX, double ** starY
              (ic0 >  ic[i-1 + (j+1)*w]) &&
              (ic0 >  ic[i   + (j+1)*w]) &&
              (ic0 >  ic[i+1 + (j+1)*w])) ||
-            (ic0>254)){
+            (ic0 > 254)){
 
           int unique = 1;
 
-          // realloc array if necessary (when the camera looks at a really bright image, this slows everything down severely)
+         // realloc array if necessary (when the camera looks at a really bright image, this slows everything down severely)
          if (blob_count >= num_blobs_alloc) {
               num_blobs_alloc += 500;
               *starX = realloc(*starX, sizeof(double)*num_blobs_alloc);
               *starY = realloc(*starY, sizeof(double)*num_blobs_alloc);
               *starMag = realloc(*starMag, sizeof(double)*num_blobs_alloc);
-              // printf("REalloc'ed blobs to %d\n", num_blobs_alloc);
           }
 
           (*starX)[blob_count] = i;
           (*starY)[blob_count] = j;
-          (*starMag)[blob_count] = 100*ic[i+j*CAMERA_WIDTH];
+          (*starMag)[blob_count] = 100*ic[i + j*CAMERA_WIDTH];
 
           // FIXME: not sure why this is necessary..
           if((*starMag)[blob_count] < 0){
             (*starMag)[blob_count] = UINT32_MAX;
           }
 
-          // If we already found a blob within SPACING and this
-          // one is bigger, replace it.
+          // If we already found a blob within SPACING and this one is bigger, replace it.
           int spacing = all_blob_params.unique_star_spacing;
           if ((*starMag)[blob_count] > 25400) {
             spacing = spacing * 4;
@@ -586,23 +608,18 @@ int get_blobs(char *input_buffer, int w, int h, double ** starX, double ** starY
           if (unique) {
             blob_count++;
           }
-          
         }
       }
     }
   }
-  //this loop flips the vertical position of the blobs back to their normal location
+  // this loop flips the vertical position of the blobs back to their normal location
   for(int ibb = 0; ibb < blob_count; ibb++){
     (*starY)[ibb] = CAMERA_HEIGHT-(*starY)[ibb];
   }
 
-  // printf("Finished finding blobs... now sorting\n");
-
-  //merge sort boi
-  part(*starMag,0,blob_count-1,*starX,*starY); //implementation below
-
-  // printf("Sorted!\n");
-
+  // merge sort
+  part(*starMag,0,blob_count-1,*starX,*starY); 
+  printf("Number of blobs found in image: %i\n", blob_count);
   return blob_count;
 
   // TODO: determine if sub-pixel centroiding is necessary
@@ -683,63 +700,63 @@ int get_blobs(char *input_buffer, int w, int h, double ** starX, double ** starY
   */
 }
 
-  //sorting implementation
+  // sorting implementation
   void merge(double * A, int p, int q, int r, double * X, double * Y){
-    int n1 = q-p+1, n2 = r-q;
-    int lin = n1+1, rin = n2+1;
-    double LM[lin],LX[lin],LY[lin],RM[rin],RX[rin],RY[rin];
-    int i,j,k;
-    LM[n1]=0;
-    RM[n2]=0;
+    int n1 = q - p + 1, n2 = r - q;
+    int lin = n1 + 1, rin = n2 + 1;
+    double LM[lin], LX[lin], LY[lin], RM[rin], RX[rin], RY[rin];
+    int i, j, k;
+    LM[n1] = 0;
+    RM[n2] = 0;
 
-    for(i=0;i<n1;i++){
+    for(i = 0; i < n1; i++){
       LM[i] = A[p+i];
       LX[i] = X[p+i];
       LY[i] = Y[p+i];
     }
 
-    for(j=0;j<n2;j++){
+    for(j = 0; j < n2; j++){
       RM[j] = A[q+j+1];
       RX[j] = X[q+j+1];
       RY[j] = Y[q+j+1];
     }
 
-    i=0;j=0;
+    i = 0; j = 0;
 
-    for(k=p;k<=r;k++){
-      if(LM[i]>=RM[j]){
-        A[k]=LM[i];
-        X[k]=LX[i];
-        Y[k]=LY[i];
+    for(k = p; k <= r; k++){
+      if(LM[i] >= RM[j]){
+        A[k] = LM[i];
+        X[k] = LX[i];
+        Y[k] = LY[i];
         i++;
       }
       else{
-        A[k]=RM[j];
-        X[k]=RX[j];
-        Y[k]=RY[j];
+        A[k] = RM[j];
+        X[k] = RX[j];
+        Y[k] = RY[j];
         j++;
       }
     }
   }
-  // recursive part of sorting (dont be scared just assume it works)
-  void part(double * A, int p, int r, double * X, double * Y){
-    if (p<r){
-      int q = (p+r)/2;
-      part(A,p,q,X,Y);
-      part(A,q+1,r,X,Y);
-      merge(A,p,q,r,X,Y);
+  // recursive part of sorting 
+  void part(double * A, int p, int r, double * X, double * Y) {
+    if (p < r) {
+      int q = (p + r)/2;
+      part(A, p, q, X, Y);
+      part(A, q + 1, r, X, Y);
+      merge(A, p, q, r, X, Y);
     }
   }
 
-  // for testing saved images in astrometry implementation ***DO NOT USE DURING FLIGHT***
-  int loadDummyPicture(char * filename, char * buffer) {
+// for testing saved images in astrometry implementation 
+int loadDummyPicture(char * filename, char * buffer) {
   FILE * fp = NULL;
-  IMAGE im[CAMERA_WIDTH][CAMERA_HEIGHT];
 
   if (!(fp = fopen(filename, "rb"))) {
     printf("Could not load file %s.\n", filename);
     return 0;
   }
+
   // find the offset to image data (first 8 bytes)
   char header[14] = {0};
   fread(header, 1, 14, fp);
@@ -751,27 +768,15 @@ int get_blobs(char *input_buffer, int w, int h, double ** starX, double ** starY
   // read image data
   fread(buffer, 1, CAMERA_WIDTH * CAMERA_HEIGHT, fp);
 
-  // for (int i = CAMERA_WIDTH-1; i >= 0; i--) {
-  //   for (int j = 0; j < CAMERA_HEIGHT; j++) {
-  //       fread(&im[i][j], sizeof(unsigned char), sizeof(IMAGE), fp);
-  //       printf("%x%x%x ", im[i][j].r, im[i][j].g, im[i][j].b);
-  //   }
-  //   printf("\n");
-  // }
-
-  //all_data.imageHeight = CAMERA_HEIGHT;
-  //all_data.imageWidth = CAMERA_WIDTH;
-  //all_data.image = im; // javier
-  //printf("Image height: %i\n", CAMERA_HEIGHT);
-  //printf("Image width: %i\n", CAMERA_WIDTH);
-
+  // close image file
   fclose(fp);
 
   return 1;
-  }
+}
 
 // make a table of stars (mostly used for testing)
-int makeTable(char * filename, char * buffer,double *starMag, double *starX, double *starY, int blob_count) {
+int makeTable(char * filename, char * buffer, double * starMag, double * starX, double * starY, 
+              int blob_count, char * datafile, int first_run) {
   FILE * fp = NULL;
 
   if (!(fp = fopen(filename, "w"))) {
@@ -779,116 +784,27 @@ int makeTable(char * filename, char * buffer,double *starMag, double *starX, dou
     return 0;
   }
 
-  for(int i=0; i < blob_count; i++){
-    fprintf(fp ,"%f,%f,%f\n", starMag[i],starX[i], starY[i]);
+  fptr = fopen(datafile, "a");
+
+  // write headers if first time
+  // if (first_run) {
+  //   fprintf(fptr, "Time (GMT) | Blobs in image | LST | RA (deg) | DEC (deg) | FR (deg) | PS | ALT (deg) | AZ (deg) | IR (deg) | Solution time (msec)\n");
+  // }
+
+  printf("Writing blobs to makeTable.txt and data file...\n");
+  for (int i = 0; i < blob_count; i++) {
+    fprintf(fp, "%f,%f,%f\n", starMag[i], starX[i], starY[i]);
+    fprintf(fptr, "Blob %i x-index, y-index: [%i, %i]\n", i, (int) starX[i], (int) starY[i]);
   }
-  // printf("table made!\n");
+
   fclose(fp);
+  fclose(fptr);
 
   return 1;
 }
 
-// unsigned char *LoadBitmapFile(char *filename, BITMAPINFOHEADER *bitmapInfoHeader) {
-//     FILE *filePtr; //our file pointer
-//     BITMAPFILEHEADER bitmapFileHeader; //our bitmap file header
-//     unsigned char *bitmapImage;  //store image data
-//     int imageIdx=0;  //image index counter
-//     unsigned char tempRGB;  //our swap variable
-
-//     //open filename in read binary mode
-//     filePtr = fopen(filename,"rb");
-//     if (filePtr == NULL)
-//         return NULL;
-
-//     //read the bitmap file header
-//     fread(&bitmapFileHeader, sizeof(BITMAPFILEHEADER), 1, filePtr);
-
-//     //verify that this is a bmp file by check bitmap id
-//     if (bitmapFileHeader.bfType !=0x4D42) {
-//         fclose(filePtr);
-//         return NULL;
-//     }
-
-//     //read the bitmap info header
-//     fread(bitmapInfoHeader, sizeof(BITMAPINFOHEADER), 1, filePtr); // small edit. forgot to add the closing bracket at sizeof
-
-//     //move file point to the begging of bitmap data
-//     fseek(filePtr, bitmapFileHeader.bfOffBits, SEEK_SET);
-
-//     //allocate enough memory for the bitmap image data
-//     bitmapImage = (unsigned char*)malloc(bitmapInfoHeader->biSizeImage);
-
-//     //verify memory allocation
-//     if (!bitmapImage) {
-//         free(bitmapImage);
-//         fclose(filePtr);
-//         return NULL;
-//     }
-
-//     //read in the bitmap image data
-//     fread(bitmapImage, bitmapInfoHeader->biSizeImage, 1, filePtr);
-
-//     //make sure bitmap image data was read
-//     if (bitmapImage == NULL) {
-//         fclose(filePtr);
-//         return NULL;
-//     }
-
-//     //swap the r and b values to get RGB (bitmap is BGR)
-//     for (imageIdx = 0;imageIdx < bitmapInfoHeader->biSizeImage;imageIdx+=3) {
-//         tempRGB = bitmapImage[imageIdx];
-//         bitmapImage[imageIdx] = bitmapImage[imageIdx + 2];
-//         //printf("%d\n", bitmapImage[imageIdx]);
-//         bitmapImage[imageIdx + 2] = tempRGB;
-//     }
-
-//     //close file and return bitmap image data
-//     fclose(filePtr);
-//     //printf("%s\n", bitmapImage);
-//     return bitmapImage;
-// }
-
-// // second try for bitmap stuff (Paul Bourke's stuff online):
-// /*
-//    Read a possibly byte swapped unsigned short integer
-// */
-// int ReadUShort(FILE *fptr,short unsigned *n,int swap)
-// {
-//    unsigned char *cptr,tmp;
-
-//    if (fread(n,2,1,fptr) != 1)
-//       return(FALSE);
-//    if (swap) {
-//       cptr = (unsigned char *)n;
-//       tmp = cptr[0];
-//       cptr[0] = cptr[1];
-//       cptr[1] =tmp;
-//    }
-//    return(TRUE);
-// }
-
-// /*
-//    Read a possibly byte swapped unsigned integer
-// */
-// int ReadUInt(FILE *fptr,unsigned int *n,int swap)
-// {
-//    unsigned char *cptr,tmp;
-
-//    if (fread(n,4,1,fptr) != 1)
-//       return(FALSE);
-//    if (swap) {
-//       cptr = (unsigned char *)n;
-//       tmp = cptr[0];
-//       cptr[0] = cptr[3];
-//       cptr[3] = tmp;
-//       tmp = cptr[1];
-//       cptr[1] = cptr[2];
-//       cptr[2] = tmp;
-//    }
-//    return(TRUE);
-// }
-
 void doCameraAndAstrometry() {
+  /* for testing the values of each field in the global structure for blob_params: */
   // printf("in camera.c, all_blob_params.spike_limit is: %d\n", all_blob_params.spike_limit);
   // printf("in camera.c, all_blob_params.dynamic_hot_pixels is: %d\n", all_blob_params.dynamic_hot_pixels);
   // printf("in camera.c, all_blob_params.centroid_search_border is: %d\n", all_blob_params.centroid_search_border);
@@ -898,67 +814,102 @@ void doCameraAndAstrometry() {
   // printf("in camera.c, all_blob_params.r_high_pass_filter is: %d\n", all_blob_params.r_high_pass_filter);
   // printf("in camera.c, all_blob_params.n_sigma is: %f\n", all_blob_params.n_sigma);
   // printf("in camera.c, all_blob_params.unique_star_spacing is: %d\n", all_blob_params.unique_star_spacing);
-  int stop = 1; // test purposes
+
+  int stop = 1; // for testing purposes
   
   // starX, starY, and starMag get allocated and set in get_blobs()
   static double * starX = NULL, * starY = NULL, * starMag = NULL;
   static char * output_buffer = NULL;
   static int first_time = 1;
+  // for writing to data txt file
+  char datafile[100];
+  // for formatting date in filename
+  char date[256];
+  char buff[100];
+  // leap year boolean
+  int leap_year;
+  // for timing the process of taking an image with the camera
+  clock_t before_image, after_image;
+  char temp[100];
   
   if (first_time) {
     output_buffer = calloc(1, CAMERA_WIDTH * CAMERA_HEIGHT);
     first_time = 0;
   }
-  //double ra = all_astro_params.ra, dec = all_astro_params.dec, fr = all_astro_params.fr, ps = all_astro_params.ps;
+
   wchar_t filename[200] = L"";
 
   // set up time
-  time_t seconds;
+  time_t seconds = time(NULL);
   struct tm * tm_info;
-  char date[256];
-  time(&seconds);
-  tm_info = localtime(&seconds);
+  // time(&seconds);
+  tm_info = gmtime(&seconds);
+  // determine if it is a leap year
+  leap_year = isLeapYear(tm_info->tm_year);
+  printf("Is it a leap year? %s\n", leap_year ? "Yes":"No");
+  // if it is a leap year, adjust tm_info accordingly before it is passed to calculations in lost_in_space
+  // if (leap_year) {
+  //   if (tm_info->tm_yday == 59) { // if we are on Feb 29th
+  //     tm_info->tm_yday++;         // there are 366, not 365, days in a leap year
+  //     tm_info->tm_mon -= 1;       // we are still in February 59 days after January 1st (Feb 29)
+  //     tm_info->tm_mday = 29;
+  //   } else if (tm_info->tm_yday > 59) {
+  //     tm_info->tm_yday++;         // there are 366, not 365, days in a leap year, and this extra day is added if we are on Feb 29 or after
+  //   }
+  // }
+  printf("Current day of the year is %i\n", tm_info->tm_yday++);
 
   int img_counter = 0;
 
-  // alternative time set-up
-  //time_t t;
-  //t = time(NULL);
-
-  // captures image (comment out when loading dummy pictures for testing, but be sure to uncomment when performing actual tests on the sky)
-  // status = is_FreezeVideo(cameraHandle, IS_WAIT);
-  // if (status == -1) {
-  //   printf("Failed to capture image.");
-  //   exit(2);
+  // captures an image 
+  // start the clock
+  before_image = clock();
+  status = is_FreezeVideo(cameraHandle, IS_WAIT);
+  // end the clock
+  after_image = clock();
+  if (status == -1) {
+    printf("Failed to capture image.");
+    exit(2);
+  }
+  // set up time
+  time_t image_taken = time(NULL);
+  struct tm * image_taken_info;
+  // time(&seconds);
+  image_taken_info = gmtime(&image_taken);
+  // if (leap_year) {
+  //   if (image_taken_info->tm_yday == 59) { // if we are on Feb 29th
+  //     image_taken_info->tm_yday++;         // there are 366, not 365, days in a leap year
+  //     image_taken_info->tm_mon -= 1;       // we are still in February 59 days after January 1st (Feb 29)
+  //     image_taken_info->tm_mday = 29;
+  //   } else if (image_taken_info->tm_yday > 59) {
+  //     image_taken_info->tm_yday++;         // there are 366, not 365, days in a leap year, and this extra day is added if we are on Feb 29 or after
+  //   }
   // }
+  // calculate time necessary for taking the image
+  double time_taken = (double) (after_image - before_image) / (double) CLOCKS_PER_SEC;
+  printf("Camera took %f seconds = %f msec to take an image.\n", time_taken, time_taken*1000);
 
-  // names file with time
+  // name image file with time
   strftime(date, sizeof(date), "/home/xscblast/Desktop/blastcam/BMPs/saved_image_%Y-%m-%d_%H:%M:%S.bmp", tm_info);
-  //strftime(date, sizeof(date), "/home/xscblast/Desktop/blastcam/BMPs/saved_image_%Y-%m-%d_%H:%M:%S.bmp", localtime(&t));
-
   swprintf(filename, 200, L"%s", date);
   ImageFileParams.pwchFileName = filename;
 
   // get the image from memory
   status = is_GetActSeqBuf(cameraHandle, &bufferNumber, &waitingMem, &memory);
 
-  // testing pictures that have already been taken ***DO NOT USE DURING FLIGHT***
-  loadDummyPicture("/home/xscblast/Desktop/blastcam/BMPs/saved_image_2019-07-01-23-34-22.bmp", memory); 
+  // testing pictures that have already been taken 
+  // loadDummyPicture("/home/xscblast/Desktop/blastcam/BMPs/saved_image_2019-07-01-23-34-22.bmp", memory); 
   // loadDummyPicture("/home/xscblast/Desktop/blastcam/BMPs/Success/saved_image_2019-07-01-23-42-16.bmp", memory);
   camera_raw = memory;
-  // store raw image data from memory variable in struct accessible by commands.c for transmission to user
-  //memcpy(&image_data, &memory, CAMERA_HEIGHT * CAMERA_WIDTH);
-  //star_camera_image.image_bytes = *memory;
 
   // find the blobs in the image
   int blob_count = get_blobs(memory, CAMERA_WIDTH, CAMERA_HEIGHT, &starX, &starY, &starMag, output_buffer);
-  // printf("%d.\n", blob_count);
   // memcpy(memory, output_buffer, CAMERA_WIDTH * CAMERA_HEIGHT); // this line makes it so kst shows the filtered image
 
-  // saves image
-  status = is_ImageFile(cameraHandle, IS_IMAGE_FILE_CMD_SAVE, (void*)&ImageFileParams, sizeof(ImageFileParams));
+  // save image
+  status = is_ImageFile(cameraHandle, IS_IMAGE_FILE_CMD_SAVE, (void*) &ImageFileParams, sizeof(ImageFileParams));
   if (status == -1) {
-    char* lastErrorString;
+    char * lastErrorString;
     int lastError = 0;
     is_GetError(cameraHandle, &lastError, &lastErrorString);
     printf("FAILED %s\n", lastErrorString);
@@ -969,17 +920,33 @@ void doCameraAndAstrometry() {
   unlink("/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
   symlink(date, "/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp"); // for relatively live updates in kst
 
+  // data file for writing to pass to makeTable and lost_in_space
+  strftime(datafile, sizeof(datafile), "/home/xscblast/Desktop/blastcam/data_%b-%d.txt", tm_info); 
+  // write time information to data file first
+  strftime(buff, sizeof(buff), "%b %d %H:%M:%S", tm_info); 
+	fptr = fopen(datafile, "a");
+	fprintf(fptr, "GMT: %s\n", buff);
+  fclose(fptr);
+
   // make a table of the blobs for kst2
-  makeTable("makeTable.txt", memory, starMag, starX, starY, blob_count);    
+  makeTable("makeTable.txt", memory, starMag, starX, starY, blob_count, datafile, first_run);    
 
   // solve astrometry
   printf("Trying to solve astrometry...\n");
-  status = lost_in_space_astrometry(starX, starY, starMag, blob_count, seconds);
+  status = lost_in_space_astrometry(starX, starY, starMag, blob_count, tm_info, datafile);
+  strftime(temp, sizeof(temp), "%b %d %H:%M:%S", image_taken_info);
+  printf("GMT time after image was taken: %s\n", temp);
 
   if (status) {
     // change to 0 to make loop stop on solve 
     stop = 1;
   } else {
-    printf("Could not solve astrometry :(\n");
+    printf("Could not solve astrometry.\n");
   }
+
+  // after this round we are no longer on the first solve of the session
+  first_run = 0;
+
+  memset(filename, 0, sizeof(filename));
+	memset(buff, 0, sizeof(buff));
 }
