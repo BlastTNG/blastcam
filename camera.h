@@ -8,6 +8,8 @@
 #define NOM_PS 7.66			    // [as/px]
 #define MAX_PS 8.0			    // [as/px]
 
+extern HIDS cameraHandle;
+
 // global structure for blob parameters
 #pragma pack(push, 1)
 struct blob_params {

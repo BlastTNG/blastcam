@@ -24,6 +24,7 @@
 #include "camera.h"
 #include "astrometry.h"
 #include "commands.h"
+#include "lens_adapter.h"
 
 // define some functions for sorting blobs later
 void merge (double A[], int p, int q, int r, double X[],double Y[]);
@@ -32,7 +33,7 @@ void part (double A[], int p, int r, double X[], double Y[]);
 #define TRUE  1
 #define FALSE 0
 
-HIDS cameraHandle = 12;         // set by ueyesetid
+HIDS cameraHandle = 12;          // set by ueyesetid
 IS_POINT_2D locationRectangle;
 IMAGE_FILE_PARAMS ImageFileParams;
 FILE * fptr;
@@ -40,25 +41,24 @@ FILE * fptr;
 int bufferNumber = 0;
 char * memory = NULL;
 char * waitingMem = NULL;
-int status;                     // variable to verify completion of methods
+int status;                      // variable to verify completion of methods
 extern int shutting_down;
-extern int camera_is_shutdown;
 unsigned char * mask = NULL;
-int first_run = 1;              // for file set-up purposes
+int first_run = 1;               // for file set-up purposes
 char * memoryStartingPointer;
 int memoryId;
 
 // initialize global struct for blob parameters with default values
 struct blob_params all_blob_params = {
-  .spike_limit = 4, // how agressive is the dynamic hot pixel finder.  Small is more agressive
-  .dynamic_hot_pixels = 0, // 0 == off, 1 == on
-  .r_smooth = 2,   // image smooth filter radius [px]
-  .high_pass_filter = 0, // 0 == off, 1 == on
-  .r_high_pass_filter = 10, // image high pass filter radius [px]
-  .centroid_search_border = 1, // distance from image edge from which to start looking for stars [px]
-  .filter_return_image = 0, // 1 == true; 0 = false
-  .n_sigma = 2.0, // pixels brighter than this time the noise in the filtered map are blobs (this number * sigma + mean)
-  .unique_star_spacing = 15,
+  .spike_limit = 4,              // how agressive is the dynamic hot pixel finder.  Small is more agressive
+  .dynamic_hot_pixels = 0,       // 0 == off, 1 == on
+  .r_smooth = 2,                 // image smooth filter radius [px]
+  .high_pass_filter = 0,         // 0 = off, 1 = on
+  .r_high_pass_filter = 10,      // image high pass filter radius [px]
+  .centroid_search_border = 1,   // distance from image edge from which to start looking for stars [px]
+  .filter_return_image = 0,      // 1 = true; 0 = false
+  .n_sigma = 2.0,                // pixels brighter than this time the noise in the filtered map are blobs (this number * sigma + mean)
+  .unique_star_spacing = 15,     // minimum spacing between two unique stars [px]
 };
 
 // function to determine if the current year is a leap year (2020 is a leap year)
@@ -76,38 +76,32 @@ int isLeapYear(int year) {
 
 // initialize the camera
 void init_camera() {
+  // local variables for exposure parameters
   double min_exposure;
   double max_exposure;
   double exposure_step_size;
   double current_exposure;
+  // flag to enable long exposures
+  unsigned int enable = 1; 
 
   // load the camera parameters
   load_camera();
 
-  // set exposure time min .03 ms, currently can't go above 150 but max should be 998 ms
-	double exposure = 50; // NOTE: test alternative values
-  unsigned int enable = 1; // enable long exposures
-  status = is_Exposure(cameraHandle, IS_EXPOSURE_CMD_SET_EXPOSURE, (void *) &exposure, sizeof(double));
+  // set exposure time based on struct field
+  status = is_Exposure(cameraHandle, IS_EXPOSURE_CMD_SET_EXPOSURE, (void *) &all_camera_params.exposure_time, sizeof(double));
+  // enable long exposure 
   status = is_Exposure(cameraHandle, IS_EXPOSURE_CMD_SET_LONG_EXPOSURE_ENABLE, (void *) &enable, sizeof(unsigned int));
+  // get current exposure, max possible exposure (with long exposure enabled), and min exposure
   status = is_Exposure(cameraHandle, IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE_MIN, &min_exposure, sizeof(double));
   status = is_Exposure(cameraHandle, IS_EXPOSURE_CMD_GET_EXPOSURE, &current_exposure, sizeof(double));
   status = is_Exposure(cameraHandle, IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE_MAX, &max_exposure, sizeof(double));
   
 	if (status != IS_SUCCESS) {
-		printf("Set exposure time fails.\n");
+		printf("Setting the exposure time fails.\n");
 	} else {
-    printf("Exposure time: %f msec\n", exposure);
-    printf("Min possible exposure time: %f msec\n", min_exposure);
-    printf("Max possible exposure time: %f msec\n", max_exposure);
+    printf("Current exposure time: %f msec | Min possible exposure: %f msec | Max possible exposure: %f msec\n", 
+            current_exposure, min_exposure, max_exposure);
   }
-
-  // status = is_GetExposureRange(cameraHandle, min_exposure, max_exposure, exposure_step_size);
-  // if (status != IS_SUCCESS) {
-  //   printf("Getting exposure information fails.\n");
-  // } else {
-  //   printf("Camera's minimum exposure with current settings is %f and maximum exposure is %f. The step size is %f.\n", 
-  //          *min_exposure, *max_exposure, *exposure_step_size);
-  // }
 
 	// initializes astrometry
   init_astrometry();
@@ -120,7 +114,6 @@ void init_camera() {
 void clean_up() {
     printf("\ncommands.c terminated, performing clean-up.\n");
     shutting_down = 1;
-    while (!camera_is_shutdown) usleep(10000);
     is_FreeImageMem(cameraHandle, memoryStartingPointer, memoryId);
     is_ExitCamera(cameraHandle);
     exit(0);
@@ -197,10 +190,6 @@ void set_camera_params(unsigned int cameraHandle) {
   if (status != IS_SUCCESS) {
     printf("Setting trigger timeout fails with status %d.\n", status);
   }
-
-  // binning control
-  // status = is_SetBinning(cameraHandle, IS_GET_BINNING); // try this during next round of testing.
-
 }
 
 // load the camera
@@ -786,11 +775,6 @@ int makeTable(char * filename, char * buffer, double * starMag, double * starX, 
 
   fptr = fopen(datafile, "a");
 
-  // write headers if first time
-  // if (first_run) {
-  //   fprintf(fptr, "Time (GMT) | Blobs in image | LST | RA (deg) | DEC (deg) | FR (deg) | PS | ALT (deg) | AZ (deg) | IR (deg) | Solution time (msec)\n");
-  // }
-
   printf("Writing blobs to makeTable.txt and data file...\n");
   for (int i = 0; i < blob_count; i++) {
     fprintf(fp, "%f,%f,%f\n", starMag[i], starX[i], starY[i]);
@@ -846,36 +830,35 @@ void doCameraAndAstrometry() {
   tm_info = gmtime(&seconds);
   // determine if it is a leap year
   leap_year = isLeapYear(tm_info->tm_year);
-  printf("Is it a leap year? %s\n", leap_year ? "Yes":"No");
+  // printf("Is it a leap year? %s\n", leap_year ? "Yes":"No");
   // if it is a leap year, adjust tm_info accordingly before it is passed to calculations in lost_in_space
-  // if (leap_year) {
-  //   if (tm_info->tm_yday == 59) { // if we are on Feb 29th
-  //     tm_info->tm_yday++;         // there are 366, not 365, days in a leap year
-  //     tm_info->tm_mon -= 1;       // we are still in February 59 days after January 1st (Feb 29)
-  //     tm_info->tm_mday = 29;
-  //   } else if (tm_info->tm_yday > 59) {
-  //     tm_info->tm_yday++;         // there are 366, not 365, days in a leap year, and this extra day is added if we are on Feb 29 or after
-  //   }
-  // }
-  printf("Current day of the year is %i\n", tm_info->tm_yday++);
+  if (leap_year) {
+    if (tm_info->tm_yday == 59) { // if we are on Feb 29th
+      tm_info->tm_yday++;         // there are 366, not 365, days in a leap year
+      tm_info->tm_mon -= 1;       // we are still in February 59 days after January 1st (Feb 29)
+      tm_info->tm_mday = 29;
+    } else if (tm_info->tm_yday > 59) {
+      tm_info->tm_yday++;         // there are 366, not 365, days in a leap year, and this extra day is added if we are on Feb 29 or after
+    }
+  }
 
   int img_counter = 0;
 
   // captures an image 
   // start the clock
-  before_image = clock();
-  status = is_FreezeVideo(cameraHandle, IS_WAIT);
-  // end the clock
-  after_image = clock();
-  if (status == -1) {
-    printf("Failed to capture image.");
-    exit(2);
-  }
+  // before_image = clock();
+  // status = is_FreezeVideo(cameraHandle, IS_WAIT);
+  // // end the clock
+  // // after_image = clock();
+  // if (status == -1) {
+  //   printf("Failed to capture image.");
+  //   exit(2);
+  // }
   // set up time
-  time_t image_taken = time(NULL);
-  struct tm * image_taken_info;
+  // time_t image_taken = time(NULL);
+  // struct tm * image_taken_info;
   // time(&seconds);
-  image_taken_info = gmtime(&image_taken);
+  // image_taken_info = gmtime(&image_taken);
   // if (leap_year) {
   //   if (image_taken_info->tm_yday == 59) { // if we are on Feb 29th
   //     image_taken_info->tm_yday++;         // there are 366, not 365, days in a leap year
@@ -886,8 +869,8 @@ void doCameraAndAstrometry() {
   //   }
   // }
   // calculate time necessary for taking the image
-  double time_taken = (double) (after_image - before_image) / (double) CLOCKS_PER_SEC;
-  printf("Camera took %f seconds = %f msec to take an image.\n", time_taken, time_taken*1000);
+  // double time_taken = (double) (after_image - before_image) / (double) CLOCKS_PER_SEC;
+  // printf("Camera took %f seconds = %f msec to take an image.\n", time_taken, time_taken*1000);
 
   // name image file with time
   strftime(date, sizeof(date), "/home/xscblast/Desktop/blastcam/BMPs/saved_image_%Y-%m-%d_%H:%M:%S.bmp", tm_info);
@@ -898,7 +881,7 @@ void doCameraAndAstrometry() {
   status = is_GetActSeqBuf(cameraHandle, &bufferNumber, &waitingMem, &memory);
 
   // testing pictures that have already been taken 
-  // loadDummyPicture("/home/xscblast/Desktop/blastcam/BMPs/saved_image_2019-07-01-23-34-22.bmp", memory); 
+  loadDummyPicture("/home/xscblast/Desktop/blastcam/BMPs/saved_image_2019-07-01-23-34-22.bmp", memory); 
   // loadDummyPicture("/home/xscblast/Desktop/blastcam/BMPs/Success/saved_image_2019-07-01-23-42-16.bmp", memory);
   camera_raw = memory;
 
@@ -934,8 +917,8 @@ void doCameraAndAstrometry() {
   // solve astrometry
   printf("Trying to solve astrometry...\n");
   status = lost_in_space_astrometry(starX, starY, starMag, blob_count, tm_info, datafile);
-  strftime(temp, sizeof(temp), "%b %d %H:%M:%S", image_taken_info);
-  printf("GMT time after image was taken: %s\n", temp);
+  // strftime(temp, sizeof(temp), "%b %d %H:%M:%S", image_taken_info);
+  // printf("GMT time after image was taken: %s\n", temp);
 
   if (status) {
     // change to 0 to make loop stop on solve 

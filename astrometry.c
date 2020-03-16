@@ -15,19 +15,21 @@
 #include <astrometry/log.h>
 #include <astrometry/errors.h>
 #include <astrometry/fileutils.h>
+#include <ueye.h>
   
 #include "/home/xscblast/astrometry/blind/solver.c"
 #include "/home/xscblast/astrometry/blind/engine.c"
 
 #include "camera.h"
 #include "astrometry.h"
+#include "lens_adapter.h"
 
 engine_t * engine = NULL;
 solver_t * solver = NULL;
 
 #define _USE_MATH_DEFINES
-#define DRL_Lat (39 + (57/60) + (7/3600)) * M_PI/180   // StarCam Room: 39.95166666666667 * M_PI / 180 // normal decimal latitude of DRL in radians
-#define DRL_Long -(75 + (11/60) + (18/3600))           // StarCam Room: -75.18944444444445      // normal decimal longitude of DRL (west is -, east +)
+#define DRL_Lat (39.0 + (57.0/60.0) + (7.0/3600.0)) * M_PI/180.0   // StarCam Room: 39.95166666666667 * M_PI / 180 // normal decimal latitude of DRL in radians
+#define DRL_Long -(75.0 + (11.0/60.0) + (18.0/3600.0))             // StarCam Room: -75.18944444444445      // normal decimal longitude of DRL (west is -, east +)
 #define UT_C0 67310.54841
 #define UT_C1 (876600.0*3600.0+8640184.812866)
 #define UT_C2 .093104
@@ -63,14 +65,12 @@ void close_astrometry() {
 	solver_free(solver);
 }
 
-double siderealtime(struct tm * info) { //, double exposure_time_ms) {
+double siderealtime(struct tm * info, double exposure_time_ms) {
 	// initialize time variables and struct
 	double juldate, T_UT1;
 	double ThetaGMST;
 	// for printing purposes
 	char buff[100];
-	double exposure_time_ms = 0.0;
-
 
 	// compute the Julian date
 	int jd = (14 - (info->tm_mon + 1))/12;        // tm_mon from 0-11 not 1-12
@@ -81,7 +81,7 @@ double siderealtime(struct tm * info) { //, double exposure_time_ms) {
 	jd = info->tm_mday + ((153*m + 2)/5) + (365*y) + (y/4) - (y/100) + (y/400) - 32045; 
 	juldate = jd + (((double) (info->tm_hour - 12 - info->tm_isdst))/24.0) + ((double) info->tm_min)/1440.0 + 
 	                ((double) info->tm_sec + (exposure_time_ms/2000.0))/86400.0;
-	printf("Julian date: %f\n", juldate);	
+
 	// compute UT1 value
 	T_UT1 = (juldate - 2451545.0)/UT_A0;
 	// conversion based on 3rd order expansion (online):
@@ -102,7 +102,7 @@ double siderealtime(struct tm * info) { //, double exposure_time_ms) {
 	strftime(buff, sizeof(buff), "%b %d %H:%M:%S", info); 
  	printf("GMT in siderealtime(), passed from doCameraAndAstrometry(): %s\n", buff); 
 
-	return (LST);
+	return LST;
 }
 
 void calc_alt(struct astro_params * params, struct tm * info) {
@@ -116,9 +116,8 @@ void calc_alt(struct astro_params * params, struct tm * info) {
 	char buff[100];
 
 	// calculate local sidereal time (LST)
-	double LST = siderealtime(info);
+	double LST = siderealtime(info, all_camera_params.exposure_time);
 	strftime(buff, sizeof(buff), "%b %d %H:%M:%S", info); 
-	printf("GMT in calc_alt: %s\n", buff);
 	printf("LST is %f degrees using siderealtime() method in calc_alt().\n", LST);
 	strftime(datafile, sizeof(datafile), "/home/xscblast/Desktop/blastcam/data_%b-%d.txt", info); 
 	fptr = fopen(datafile, "a");
@@ -151,7 +150,7 @@ void calc_az(struct astro_params * params, struct tm * info) {
 	double AZ;
 	
 	// calculate sidereal time (should be synchronized with LST in calc_alt())
-	double LST = siderealtime(info);
+	double LST = siderealtime(info, all_camera_params.exposure_time);
 
     // find hour angle
     double ha = LST - ra;

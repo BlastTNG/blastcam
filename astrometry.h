@@ -25,7 +25,7 @@ struct astro_params {
 // make all blob_params acessible from any file that includes camera.h
 extern struct astro_params all_astro_params;
 
-double siderealtime(struct tm * info); //, double exposure_time_ms);
+double siderealtime(struct tm * info, double exposure_time_ms);
 void calc_az(struct astro_params * params, struct tm * tm_info);
 void calc_alt(struct astro_params * params, struct tm * tm_info);
 

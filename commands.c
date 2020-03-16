@@ -43,6 +43,8 @@ struct tcp_data {
 	float el;
 	float ir;
     float logodds;
+    double latitude;
+    double longitude;
     struct camera_params cam_settings; 
     struct blob_params current_blob_params;
 };
@@ -51,6 +53,7 @@ struct cmd_data {
     double logodds;
     double latitude;
     double longitude;
+    double exposure;
     float focusPos; 
     float set_focus_inf;    // 0 = false, 1 = true (whether or not to set the focus to infinity)
     int aperture_steps;
@@ -73,17 +76,14 @@ struct tcp_data all_data = {0};
 
 void * camera_raw;
 
-int command_lock = 0;  // if 1, then commanding is in use, if 0, then not
-int shutting_down = 0; // if 0, then camera is not closing, so keep solving astrometry
-int camera_is_shutdown = 1; // if 1, then the camera is not being accessed
+int command_lock = 0;       // if 1, then commanding is in use, if 0, then not
+int shutting_down = 0;      // if 0, then camera is not closing, so keep solving astrometry
 
 void *updateAstrometry() {
     // solve astrometry perpetually
-    camera_is_shutdown = 0;
     while (!shutting_down) {
         doCameraAndAstrometry();
     }
-    camera_is_shutdown = 1;
 }
 
 void *client_handler(void *arg) {
@@ -98,18 +98,40 @@ void *client_handler(void *arg) {
     while (1) {
         n = recvfrom(sock, &all_cmds, sizeof(struct cmd_data), 0, (struct sockaddr *) &addr, &length); 
         if (n == -1) {
-            printf("User did not send any commands. Send telemetry and camera settings back anyway.\n");
+            printf("User %s did not send any commands. Send telemetry and camera settings back anyway.\n", useraddr);
         } else {
             while (command_lock) {
                 usleep(100000);
             }
             command_lock = 1;
-            printf("User sent commands. Executing...\n");
+            printf("User %s sent commands. Executing...\n", useraddr);
+
+            // print statements to evaluate commands when testing (comment out otherwise)
+            // printf("Logodds command: %f\n", all_cmds.logodds);
+            // printf("Latitude and longitude commands: %f and %f\n", all_cmds.latitude, all_cmds.longitude);
+            printf("Exposure command in commands.c: %f\n", all_cmds.exposure);
+            printf("Focus position command: %f\n", all_cmds.focusPos);
+            printf("Set focus to infinity bool command: %f\n", all_cmds.set_focus_inf);
+            // printf("Aperture steps command: %i\n", all_cmds.aperture_steps);
+            // ("Set aperture max bool: %f\n", all_cmds.set_max_aperture);
+            // printf("Blob parameters: %f, %f, %f, %f, %f, %f, %f, %f, %f\n", all_cmds.blobParams[0], all_cmds.blobParams[1],
+                    // all_cmds.blobParams[2], all_cmds.blobParams[3], all_cmds.blobParams[4], all_cmds.blobParams[5],
+                    // all_cmds.blobParams[6], all_cmds.blobParams[7], all_cmds.blobParams[8]);
+
             // if user changed latitude and longitude (they are not at default location, DRL), then change that in struct
             // of astro params as well
             all_astro_params.logodds = all_cmds.logodds;
             all_astro_params.latitude = all_cmds.latitude;
             all_astro_params.longitude = all_cmds.longitude;
+            // printf("all_cmds exposure is: %f and all_camera_params exposure rounded is: %f\n", all_cmds.exposure, ceil(all_camera_params.exposure_time));
+            // if user has adjusted the exposure time, set camera exposure to their desired value
+            if (ceil(all_cmds.exposure) != ceil(all_camera_params.exposure_time)) {
+                printf("User %s wants to change exposure.\n", useraddr);
+                // update value in camera params struct
+                all_camera_params.exposure_time = all_cmds.exposure;
+                all_camera_params.change_exposure_bool = 1;
+            }
+
             // if the command to set the focus to infinity is true (1), ignore any other commands the user might have put in for focus
             all_camera_params.focus_inf = all_cmds.set_focus_inf;
             // if user wants to change the focus, change focus position value in camera params struct
@@ -121,17 +143,17 @@ void *client_handler(void *arg) {
             all_camera_params.max_aperture = all_cmds.set_max_aperture;
             all_camera_params.aperture_steps = all_cmds.aperture_steps;
 
-            // perform changes to camera settings
+            // perform changes to camera lens settings
             handleFocusAndAperture(fileDesc);
 
             // process the blob parameters
             int new_spike_limit = all_cmds.blobParams[0];            // how agressive is the dynamic hot pixel finder.  Small is more agressive
-            int new_dynamic_hot_pixels = all_cmds.blobParams[1];     // 0 == off, 1 == on
+            int new_dynamic_hot_pixels = all_cmds.blobParams[1];     // 0 = off, 1 = on
             int new_r_smooth = all_cmds.blobParams[2];               // image smooth filter radius [px]
-            int new_high_pass_filter = all_cmds.blobParams[3];       // 0 == off, 1 == on
+            int new_high_pass_filter = all_cmds.blobParams[3];       // 0 = off, 1 = on
             int new_r_high_pass_filter = all_cmds.blobParams[4];     // image high pass filter radius [px]
             int new_centroid_search_border = all_cmds.blobParams[5]; // distance from image edge from which to start looking for stars [px]
-            int new_filter_return_image = all_cmds.blobParams[6];    // 1 == true; 0 = false
+            int new_filter_return_image = all_cmds.blobParams[6];    // 1 = true; 0 = false
             double new_n_sigma = all_cmds.blobParams[7];             // pixels brighter than this time the noise in the filtered map are blobs (this number * sigma + mean)
             int new_unique_star_spacing = all_cmds.blobParams[8];
 
@@ -174,20 +196,25 @@ void *client_handler(void *arg) {
         all_data.el = all_astro_params.alt;
         all_data.ir = all_astro_params.ir;
         all_data.logodds = all_astro_params.logodds;
+        all_data.latitude = all_astro_params.latitude;
+        all_data.longitude = all_astro_params.longitude;
         // transfer camera params struct to one in tcp_data struct to send back to user
         memcpy(&all_data.cam_settings, &all_camera_params, sizeof(all_camera_params));
         memcpy(&all_data.current_blob_params, &all_blob_params, sizeof(all_blob_params));
 
+        // printf("Size of all_data: %lu\n", sizeof(all_data));
+
         time_t seconds; 
         seconds = time(NULL); 
         all_data.curr_time = seconds;
+        // printf("size of data %lu\n", sizeof(all_data));
         if (send(sock, &all_data, sizeof(struct tcp_data), MSG_NOSIGNAL) <= 0) {
             printf("Client dropped the connection.\n");
             break;
         } 
         // send image bytes back to user for display
         int n_sent_bytes = send(sock, camera_raw, CAMERA_WIDTH*CAMERA_HEIGHT, MSG_NOSIGNAL);
-        printf("Telemetry and image sent back to user.\n");      
+        printf("Telemetry and image bytes sent back to user.\n");      
     }
     // clean up socket when the connection is done
     close(sock);

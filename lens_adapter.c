@@ -74,27 +74,32 @@ FUNCTIONS:
 
 #include "lens_adapter.h"
 #include "astrometry.h"
+#include "camera.h"
 
 int runCommand(const char * command, int file, char * returnStr);
 char * returnVal;
 int comStatus;
 char * buffer;
 int fileDescriptor;
-double focus_shift;
+int focus_shift;
+double current_exposure;
 
 int dummy_storage;
 
 // initialize the camera parameters global structure
 struct camera_params all_camera_params = {
-  .prev_focus_pos = 0, // need to save previous focus value to determine by how much we need to move in mf command below
+  .prev_focus_pos = 0,       // need to save previous focus value to determine by how much we need to move in mf command below
   .focus_position = 0, 
   .focus_inf = 0,     
   .aperture_steps = 0,
-  .max_aperture = 0,   // (bool) default is to maximize aperture
+  .max_aperture = 0,         // (bool) default is to maximize aperture
   // these fields are for information for user GUI, not for changing camera settings
   .current_aperture = 0,
   .min_focus_pos = 0,
   .max_focus_pos = 0,
+  // exposure params
+  .exposure_time = 100,      // 100 msec is default exposure time
+  .change_exposure_bool = 0, // don't want to change the exposure from default value unless user commands it
 };
 
 // initialize the lens adapter and run commands
@@ -109,31 +114,31 @@ int init_lensAdapter (char * path) {
     struct termios options;
 
     tcgetattr(fileDescriptor, &options);
-    cfsetispeed(&options, B115200);               // input speed
-    cfsetospeed(&options, B115200);               // output speed
+    cfsetispeed(&options, B115200);                         // input speed
+    cfsetospeed(&options, B115200);                         // output speed
 
     // standard setting for DSP 1750
     options.c_cflag = (options.c_cflag & ~CSIZE) | CS8;     // 8-bit chars
     // disable IGNBRK for mismatched speed tests; otherwise receive break
     // as \000 cha
-    options.c_iflag |= IGNBRK;          // ignore break signal
-    options.c_lflag = 0;                // no signaling chars, no echo,
-                                        // no canonical processing
-    options.c_oflag = 0;                // no remapping, no delays
-    options.c_cc[VMIN]  = 1;            // read doesn't block
-    options.c_cc[VTIME] = 5;            // tenths of seconds for read timeout (intege
-    options.c_iflag &= ~(IXON | IXOFF | IXANY); // shut off xon/xoff ctrl
+    options.c_iflag |= IGNBRK;                              // ignore break signal
+    options.c_lflag = 0;                                    // no signaling chars, no echo,
+                                                            // no canonical processing
+    options.c_oflag = 0;                                    // no remapping, no delays
+    options.c_cc[VMIN]  = 1;                                // read doesn't block
+    options.c_cc[VTIME] = 5;                                // tenths of seconds for read timeout (intege
+    options.c_iflag &= ~(IXON | IXOFF | IXANY);             // shut off xon/xoff ctrl
     options.c_cflag &= ~CSTOPB;
     options.c_oflag &= ~OPOST;
     options.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG);
-    options.c_cflag |= (CLOCAL | CREAD);        // ignore modem controls,
-                                                // enable reading
-    options.c_cflag &= ~(PARENB | PARODD);      // shut off parity
+    options.c_cflag |= (CLOCAL | CREAD);                    // ignore modem controls,
+                                                            // enable reading
+    options.c_cflag &= ~(PARENB | PARODD);                  // shut off parity
     options.c_cflag &= ~CSTOPB;
-    options.c_cflag &= ~CRTSCTS; // turns off flow control maybe?
-                                 // http://pubs.opengroup.org/onlinepubs/009695399/basedefs/xbd_chap11.html#tag_11_02_04
-                                 // ^list of possible c_cflag options (doesnt include crtscts)
-                                 // crtscts does not exist in termios.h documentation
+    options.c_cflag &= ~CRTSCTS;                            // turns off flow control maybe?
+                                                            // http://pubs.opengroup.org/onlinepubs/009695399/basedefs/xbd_chap11.html#tag_11_02_04
+                                                            // ^list of possible c_cflag options (doesnt include crtscts)
+                                                            // crtscts does not exist in termios.h documentation
     options.c_iflag |= ICRNL;
     // sets a read timeout of 2 seconds so it doesn't block forever
     options.c_lflag &= ~ICANON;
@@ -141,7 +146,7 @@ int init_lensAdapter (char * path) {
     options.c_cc[VMIN] = 0;
     // options.c_iflag |= IGNCR;
 
-    tcsetattr(fileDescriptor, TCSANOW, &options);     // apply changes
+    tcsetattr(fileDescriptor, TCSANOW, &options);           // apply changes
 
     // flush the buffer (in case of unclean shutdown)
     if (tcflush(fileDescriptor, TCIOFLUSH) < 0) {
@@ -160,7 +165,7 @@ int init_lensAdapter (char * path) {
         printf("Focus moved to desired default position.\n");
     }
     // print focus position
-    printf("Focus range at 80 counts below infinity:\n");
+    printf("Focus at 80 counts below infinity:\n");
     comStatus = runCommand("fp\r", fileDescriptor, returnVal);
     if (comStatus == -1) {
         printf("Failed to print the new focus position.\n");
@@ -173,7 +178,7 @@ int init_lensAdapter (char * path) {
     if (comStatus == -1) {
         printf("Failed to initialize the motor.\n");
     }
-    // run the aperture maximization command
+    // run the aperture maximization (fully open) command
     comStatus = runCommand("mo\r", fileDescriptor, returnVal);
     if (comStatus == -1) {
         printf("Setting the aperture to maximum fails.\n");
@@ -205,23 +210,19 @@ void handleFocusAndAperture(int fileDescriptor) {
     }  else {
         // calculate the shift needed to get from current focus position to user-specified focus position
         focus_shift = all_camera_params.focus_position - all_camera_params.prev_focus_pos;
-        printf("Focus change (internal calculation, not command): %f\n", focus_shift);
+        printf("Focus change (internal calculation, not command): %i\n", focus_shift);
+
         char focus_str_cmd[10]; // (4 characters for "mf +" and then 6 for 6 digits of precision in focus shift number)
-        // account for the sign of the shift in making the string command for runCommand()
         if (focus_shift != 0) {
-            if (focus_shift > 0) {
-                sprintf(focus_str_cmd, "mf +%f\r", focus_shift);
-            } else {
-                sprintf(focus_str_cmd, "mf %f\r", focus_shift);
-            }
-            // shift the focus (perform the command)
+            sprintf(focus_str_cmd, "mf %i\r", focus_shift);
+            // shift the focus 
             comStatus = runCommand(focus_str_cmd, fileDescriptor, returnVal);
             if (comStatus == -1) {
                 printf("Failed to move the focus to the desired position.\n");
             } else {
                 printf("Focus moved to desired absolute position.\n");
             }
-            // print focus position
+            // print focus position for confirmation
             comStatus = runCommand("fp\r", fileDescriptor, returnVal);
             if (comStatus == -1) {
                 printf("Failed to print the new focus position.\n");
@@ -229,13 +230,7 @@ void handleFocusAndAperture(int fileDescriptor) {
         }
     }
 
-    // initialize the aperture motor
-    //comStatus = runCommand("in\r", fileDescriptor, returnVal);
-    //if (comStatus == -1) {
-    //    printf("Failed to initialize the motor.\n");
-    //}
-
-    // set the aperture to the maximum
+    // if the user wants to set the aperture to the maximum
     if (all_camera_params.max_aperture == 1) {
         all_camera_params.current_aperture = 28;
         comStatus = runCommand("mo\r", fileDescriptor, returnVal); 
@@ -266,6 +261,20 @@ void handleFocusAndAperture(int fileDescriptor) {
             all_camera_params.aperture_steps = 0;  
         }
     }
+
+    // change the exposure if the user commanded it
+    if (all_camera_params.change_exposure_bool) {
+        printf("Adjusting exposure in lens_adapter.c.\n");
+        // change boolean to 0 so exposure isn't adjusted again until sends another command
+        all_camera_params.change_exposure_bool = 0;
+        // run ueye function to update camera exposure
+        if (is_Exposure(cameraHandle, IS_EXPOSURE_CMD_SET_EXPOSURE, (void *) &all_camera_params.exposure_time, sizeof(double)) != IS_SUCCESS) {
+            printf("Adjusting exposure to user command unsuccessful.\n");
+        }
+        // check with current_exposure that exposure has been adjusted to desired value
+        is_Exposure(cameraHandle, IS_EXPOSURE_CMD_GET_EXPOSURE, &current_exposure, sizeof(double));
+        printf("Exposure is now %f msec.\n", current_exposure);
+    }
 }
 
 // defines runCommand() to execute built-in camera commands
@@ -282,7 +291,7 @@ int runCommand(const char * command, int file, char * returnStr){
     tcflush(file, TCIOFLUSH);
     int status = write(file, command, strlen(command));
     if (status < 0) {
-        printf("Write of command on file %d has failed; error %d\n", file, errno);
+        printf("Write of command on file %d has failed; error %d.\n", file, errno);
         return -1;
     }
 
@@ -306,7 +315,6 @@ int runCommand(const char * command, int file, char * returnStr){
 
     buffer[99] = '\0';
     buffer[status] = '\0';	
-
 
     if (strstr(buffer, "ERR") != NULL) {
         printf("Read returned error %s.\n", buffer);
@@ -339,6 +347,5 @@ int runCommand(const char * command, int file, char * returnStr){
     }
 
     free(buffer);
-
     return 0;
 }

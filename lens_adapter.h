@@ -17,6 +17,9 @@ struct camera_params {
   int min_focus_pos;
   int max_focus_pos;
   int current_aperture;
+  // camera parameter, not lens parameter
+  double exposure_time;
+  double change_exposure_bool;
 };
 #pragma pack(pop)
 
