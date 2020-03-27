@@ -37,7 +37,7 @@ void init_camera();
 void doCameraAndAstrometry();
 void clean_up();
 int isLeapYear(int year);
-int makeTable(char * filename, char * buffer, double * starMag, double * starX, double * starY, int blob_count, 
-              char * datafile, int first_run);
+void verifyBlobParams();
+int makeTable(char * filename, char * blobfile, char * buffer, double * starMag, double * starX, double * starY, int blob_count);
 
 #endif 

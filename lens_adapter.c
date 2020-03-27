@@ -88,18 +88,18 @@ int dummy_storage;
 
 // initialize the camera parameters global structure
 struct camera_params all_camera_params = {
-  .prev_focus_pos = 0,       // need to save previous focus value to determine by how much we need to move in mf command below
-  .focus_position = 0, 
-  .focus_inf = 0,     
-  .aperture_steps = 0,
-  .max_aperture = 0,         // (bool) default is to maximize aperture
-  // these fields are for information for user GUI, not for changing camera settings
-  .current_aperture = 0,
-  .min_focus_pos = 0,
-  .max_focus_pos = 0,
-  // exposure params
-  .exposure_time = 100,      // 100 msec is default exposure time
-  .change_exposure_bool = 0, // don't want to change the exposure from default value unless user commands it
+    .prev_focus_pos = 0,       // need to save previous focus value to determine by how much we need to move in mf command below
+    .focus_position = 0, 
+    .focus_inf = 0,     
+    .aperture_steps = 0,
+    .max_aperture = 0,         // (bool) default is to maximize aperture
+    // these fields are for information for user GUI, not for changing camera settings
+    .current_aperture = 0,
+    .min_focus_pos = 0,
+    .max_focus_pos = 0,
+    // exposure params
+    .exposure_time = 100,      // 100 msec is default exposure time
+    .change_exposure_bool = 0, // don't want to change the exposure from default value unless user commands it
 };
 
 // initialize the lens adapter and run commands

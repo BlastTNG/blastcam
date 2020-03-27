@@ -28,7 +28,6 @@
 #include "commands.h"
 
 #define PORT  8000
-#define MAXSZ 1024
 
 // define data structures
 #pragma pack(push)
@@ -109,11 +108,11 @@ void *client_handler(void *arg) {
             // print statements to evaluate commands when testing (comment out otherwise)
             // printf("Logodds command: %f\n", all_cmds.logodds);
             // printf("Latitude and longitude commands: %f and %f\n", all_cmds.latitude, all_cmds.longitude);
-            printf("Exposure command in commands.c: %f\n", all_cmds.exposure);
-            printf("Focus position command: %f\n", all_cmds.focusPos);
-            printf("Set focus to infinity bool command: %f\n", all_cmds.set_focus_inf);
+            // printf("Exposure command in commands.c: %f\n", all_cmds.exposure);
+            // printf("Focus position command: %f\n", all_cmds.focusPos);
+            // printf("Set focus to infinity bool command: %f\n", all_cmds.set_focus_inf);
             // printf("Aperture steps command: %i\n", all_cmds.aperture_steps);
-            // ("Set aperture max bool: %f\n", all_cmds.set_max_aperture);
+            // printf("Set aperture max bool: %f\n", all_cmds.set_max_aperture);
             // printf("Blob parameters: %f, %f, %f, %f, %f, %f, %f, %f, %f\n", all_cmds.blobParams[0], all_cmds.blobParams[1],
                     // all_cmds.blobParams[2], all_cmds.blobParams[3], all_cmds.blobParams[4], all_cmds.blobParams[5],
                     // all_cmds.blobParams[6], all_cmds.blobParams[7], all_cmds.blobParams[8]);
@@ -234,7 +233,6 @@ int main() {
     struct sockaddr_in clientAddress; // server sends to client on this address 
     int n;
     int len; 
-    char msg[MAXSZ];
     int clientAddressLength;
     int pid;    
 

@@ -28,8 +28,8 @@ engine_t * engine = NULL;
 solver_t * solver = NULL;
 
 #define _USE_MATH_DEFINES
-#define DRL_Lat (39.0 + (57.0/60.0) + (7.0/3600.0)) * M_PI/180.0   // StarCam Room: 39.95166666666667 * M_PI / 180 // normal decimal latitude of DRL in radians
-#define DRL_Long -(75.0 + (11.0/60.0) + (18.0/3600.0))             // StarCam Room: -75.18944444444445      // normal decimal longitude of DRL (west is -, east +)
+#define LAT (40.0 + (47.0/60.0) + (30.0/3600.0)) * M_PI/180.0   // StarCam Room: 39.95166666666667 * M_PI / 180 // normal decimal latitude of DRL in radians
+#define LONG -(73.0 + (40.0/60.0) + (52.0/3600.0))             // StarCam Room: -75.18944444444445      // normal decimal longitude of DRL (west is -, east +)
 #define UT_C0 67310.54841
 #define UT_C1 (876600.0*3600.0+8640184.812866)
 #define UT_C2 .093104
@@ -40,16 +40,16 @@ FILE * fptr;
 
 // create instance of astrometry parameters global structure, accessible from telemetry.c as well
 struct astro_params all_astro_params = {
-  .logodds = 1e7,
-  .latitude = DRL_Lat,
-  .longitude = DRL_Long,
-  .ra = 0, 
-  .dec = 0,
-  .fr = 0,
-  .ps = 0,
-  .ir = 0,
-  .alt = 0,
-  .az = 0,
+	.logodds = 1e7,
+	.latitude = LAT,
+	.longitude = LONG,
+	.ra = 0, 
+	.dec = 0,
+	.fr = 0,
+	.ps = 0,
+	.ir = 0,
+	.alt = 0,
+	.az = 0,
 };
 
 void init_astrometry() {
@@ -93,10 +93,10 @@ double siderealtime(struct tm * info, double exposure_time_ms) {
 	double LST = ThetaGMST + all_astro_params.longitude;
 	// get LST within proper bounds (shift by 360 degrees if necessary)
 	while (LST < 0) {
-			LST += 360;
+		LST += 360;
 	}
 	while (LST > 360) {
-			LST -= 360;
+		LST -= 360;
 	}
 
 	strftime(buff, sizeof(buff), "%b %d %H:%M:%S", info); 
@@ -121,7 +121,7 @@ void calc_alt(struct astro_params * params, struct tm * info) {
 	printf("LST is %f degrees using siderealtime() method in calc_alt().\n", LST);
 	strftime(datafile, sizeof(datafile), "/home/xscblast/Desktop/blastcam/data_%b-%d.txt", info); 
 	fptr = fopen(datafile, "a");
-	fprintf(fptr, "LST for this solution (corresponds to above GMT): %f\n", LST);
+	fprintf(fptr, "%.9f|", LST);
 	fclose(fptr);
 	memset(buff, 0, sizeof(buff));
 
@@ -286,7 +286,7 @@ int lost_in_space_astrometry(double * starX, double * starY, double * starMag, u
 		// write astrometry solution to data.txt file
 		printf("Writing astrometry solution to data file...\n");
 		fptr = fopen(datafile, "a");
-		fprintf(fptr, "Astrometry: RA %lf | DEC %lf | FR %lf | PS %lf | ALT %lf | AZ %lf | IR %lf\nSolved in %d msec.\n", 
+		fprintf(fptr, "%lf|%lf|%lf|%lf|%.9f|%.9f|%lf|%d", 
 		        all_astro_params.ra, all_astro_params.dec, all_astro_params.fr, all_astro_params.ps, all_astro_params.alt, 
 				all_astro_params.az, all_astro_params.ir, completion);
 		fclose(fptr); // close the file
