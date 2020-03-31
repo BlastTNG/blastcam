@@ -40,7 +40,7 @@ FILE * fptr;
 
 // create instance of astrometry parameters global structure, accessible from telemetry.c as well
 struct astro_params all_astro_params = {
-	.logodds = 1e7,
+	.logodds = 1e8,
 	.latitude = LAT,
 	.longitude = LONG,
 	.ra = 0, 

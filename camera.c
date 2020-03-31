@@ -80,6 +80,8 @@ struct blob_params all_blob_params = {
     .filter_return_image = 0,      // 1 = true; 0 = false
     .n_sigma = 2.0,                // pixels brighter than this time the noise in the filtered map are blobs (this number * sigma + mean)
     .unique_star_spacing = 15,     // minimum spacing between two unique stars [px]
+    .make_static_hp_mask = 0,     // make the mask (once, value should be 20), set to 0 when finished with test pictures
+    .use_static_hp_mask = 0,       // always use the hot pixel mask 
 };
 
 // function to determine if the current year is a leap year (2020 is a leap year)
@@ -200,7 +202,7 @@ void set_camera_params(unsigned int cameraHandle) {
     }
     // check auto shutter is off
     is_SetAutoParameter(cameraHandle, IS_GET_ENABLE_AUTO_SHUTTER, &currShutter, NULL);
-    printf("Auto shutter (should be off): %f\n", currShutter);
+    printf("Auto shutter (should be off): %.1f\n", currShutter);
 
     // disable auto frame rate
     double autoFramerate = 0;
@@ -210,7 +212,7 @@ void set_camera_params(unsigned int cameraHandle) {
     }
     // check auto frame rate is off
     is_SetAutoParameter(cameraHandle, IS_GET_ENABLE_AUTO_FRAMERATE, &actualAutoFR, NULL);
-    printf("Auto frame rate (should be off): %f\n", actualAutoFR);
+    printf("Auto frame rate (should be off): %.1f\n", actualAutoFR);
 
     // disable gain boost to reduce noise
     status = is_SetGainBoost(cameraHandle, IS_SET_GAINBOOST_OFF);
@@ -322,7 +324,6 @@ int load_camera() {
         printf("Frame rate failed to set.\n");
         exit(2);
     }
-    printf("Frame rate right after being set (in load_camera()): %f\n", newFPS);
 
     // set trigger to software mode (call is_FreezeVideo to take a single picture in single frame mode)
 	if ((status = is_SetExternalTrigger(cameraHandle, IS_SET_TRIGGER_SOFTWARE)) != IS_SUCCESS) {
@@ -348,9 +349,52 @@ int saveImage() {
 
 void makeMask(char * ib, int i0, int j0, int i1, int j1, int x0, int y0, bool subframe) {
     static int first_time = 1;
+    // Declare static hot pixel coordinates
+    static int * x_p = NULL;
+    static int * y_p = NULL;
+    // number of pixels stored
+    static int num_p = 0;
+    // number of pixels allocated
+    static int num_alloc = 0;
 
     if (first_time) {
         mask = calloc(CAMERA_WIDTH*CAMERA_HEIGHT, 1);
+
+        // // read from file with bright pixel coordinates in it
+        // FILE * f = fopen(STATIC_HP_MASK, "r");
+        // int i, j;
+
+        // x_p = calloc(100, sizeof(int));
+        // y_p = calloc(100, sizeof(int));
+        // num_alloc = 100;
+
+        // if (f) {
+        //     printf("*---------------------- Loading static hot pixel map... ----------------------*\n");
+        //     char * line = NULL;
+        //     size_t len = 0;
+        //     int read = 0;
+
+        //     // read every line in the file
+        //     while ((read = getline(&line, &len, f)) != -1) {
+        //         sscanf(line, "%d,%d\n", &i, &j);
+
+        //         if (num_p >= num_alloc) {
+        //             num_p += 100;
+        //             x_p = realloc(x_p, sizeof(int) * num_alloc);
+        //             y_p = realloc(y_p, sizeof(int) * num_alloc);
+        //         }
+
+        //         x_p[num_p] = i;
+        //         y_p[num_p] = CAMERA_HEIGHT - j; // map y coordinate to image in memory from Kst blob
+
+        //         printf("Coordinates read from hp file: [%i, %i]\n", i, j);
+
+        //         num_p++;
+        //     }
+        //     fflush(f);
+        //     fclose(f);
+        // }
+
         first_time = 0;
     }
 
@@ -397,6 +441,16 @@ void makeMask(char * ib, int i0, int j0, int i1, int j1, int x0, int y0, bool su
             for (i = i0; i < i1; i++) {
                 mask[i + j*CAMERA_WIDTH] = 1;
             }
+        }
+    }
+
+    if (all_blob_params.use_static_hp_mask) {
+        printf("*---------------------- Masking %d pixels... ----------------------*\n", num_p);
+        for (int i = 0; i < num_p; i++) {
+            // set all static hot pixels to 0
+            printf("Coordinates going into mask index: [%i, %i]\n", x_p[i], CAMERA_HEIGHT - y_p[i]);
+            int ind = CAMERA_WIDTH * y_p[i] + x_p[i];
+            mask[ind] = 0;
         }
     }
 /*
@@ -481,7 +535,7 @@ void boxcarFilterImage(char * ib, int i0, int j0, int i1, int j1, int r_f, doubl
     }
 }
 
-int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** starY, double ** starMag, char * output_buffer) {
+int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** starY, double ** starMag, char * output_buffer, char * filename) {
     static int first_time = 1;
     static double * ic = NULL;
     static double * ic2 = NULL;
@@ -517,15 +571,33 @@ int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** star
     
     b = all_blob_params.centroid_search_border;
 
-    makeMask(input_buffer, i0, j0, i1, j1, 0, 0, 0);
-
-/*   
-    for (int i = 0; i < 200; i++) {
-        if (i%16 == 0) printf("\n");
-        printf("%d ", (int) mask[CAMERA_WIDTH*b+i]);
+    // if we want to make a new hot pixel mask
+    if (all_blob_params.make_static_hp_mask) {
+        printf("*---------------------- Making static hot pixel map... ----------------------*\n");
+        // make a file and write bright pixel coordinates to it
+        FILE * f = fopen(STATIC_HP_MASK, "a"); // change file opening mode to "w" when not testing with dark images
+        fprintf(f, "Image file: %s\n", filename); // comment out when not taking dark images
+        for (int j = 0; j < CAMERA_HEIGHT; j++) {
+            for (int i = 0; i < CAMERA_WIDTH; i++) {
+                // index in the array where we are
+                int ind = CAMERA_WIDTH*j + i; 
+                // check pixel value to see if it's above hot pixel threshold
+                if (input_buffer[ind] > all_blob_params.make_static_hp_mask) {
+                    int x_p = i;
+                    int y_p = CAMERA_HEIGHT - j; // make this agree with blob coordinates in Kst
+                    fprintf(f, "%d,%d\n", x_p, y_p);
+                    printf("Value of pixel (should be > %i): %d | Coordinates: [%d, %d]\n", all_blob_params.make_static_hp_mask, 
+                                                                                            input_buffer[ind], x_p, y_p);
+                }
+            }
+        }
+        fflush(f);
+        fclose(f);
+        // do not want to recreate hp mask automatically, so set field to 0
+        all_blob_params.make_static_hp_mask = 0;
     }
-    printf("\n");
-*/
+
+    makeMask(input_buffer, i0, j0, i1, j1, 0, 0, 0);
 
     double sx = 0, sx2 = 0;
     double sx_raw = 0; // sum of non-highpass filtered field
@@ -533,14 +605,6 @@ int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** star
 
     // lowpass filter the image - reduce noise.
     boxcarFilterImage(input_buffer, i0, j0, i1, j1, all_blob_params.r_smooth, ic);
-
-/* 
-    for (int i = 0; i < 200; i++) {
-        if (i%16 == 0) printf("\n");
-        printf("%g ", ic[CAMERA_WIDTH*(b+10)+i]);
-    }
-    printf("\n");
-*/
 
     if (all_blob_params.high_pass_filter) { // only high-pass filter full frames
         b += all_blob_params.r_high_pass_filter;
@@ -578,19 +642,19 @@ int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** star
         if (all_blob_params.high_pass_filter) pixel_offset = 50;
 
         if (all_blob_params.filter_return_image) {
-            for (int j = j0+1; j < j1-1; j++) {
-                for (int i = i0+1; i < i1-1; i++) {
+            for (int j = j0 + 1; j < j1 - 1; j++) {
+                for (int i = i0 + 1; i < i1 - 1; i++) {
                   output_buffer[i + j*w] = ic[i + j*w]+pixel_offset;
                 }
             }
             for (int j = 0; j < b; j++) {
                 for (int i = i0; i < i1; i++) {
-                  output_buffer[i + (j + j0)*w] = output_buffer[i + (j1 - j - 1)*w] = mean+pixel_offset;
+                  output_buffer[i + (j + j0)*w] = output_buffer[i + (j1 - j - 1)*w] = mean + pixel_offset;
                 }
             }
             for (int j = j0; j < j1; j++) {
                 for (int i = 0; i < b; i++) {
-                  output_buffer[i + i0 + j*w] = output_buffer[i1 - i - 1 + j*w] = mean+pixel_offset;
+                  output_buffer[i + i0 + j*w] = output_buffer[i1 - i - 1 + j*w] = mean + pixel_offset;
                 }
             }
         } else {
@@ -611,7 +675,7 @@ int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** star
         	difference = clock() - before;
             msec = difference  * 1000/ CLOCKS_PER_SEC;		      
             diff = trigger - msec;
-        	if(diff < 0) {
+        	if (diff < 0) {
         	    printf("Blob-finder timed out!\n");
         	    return 0;
         	}
@@ -681,86 +745,9 @@ int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** star
     }
 
     // merge sort
-    part(*starMag,0,blob_count-1,*starX,*starY); 
+    part(*starMag, 0, blob_count-1, *starX, *starY); 
     printf("Number of blobs found in image: %i\n", blob_count);
     return blob_count;
-
-  // TODO: determine if sub-pixel centroiding is necessary
-  /*** find centroids: ***
-   * re-map a sub-image around the blob
-   * onto a 'res' times
-   * higher resolution map 1D map, then low-pass
-   * filter it, and then find the peak.
-   * Do this first for X, then for Y.
-   * Clearly, this has a precision of
-   * pixelScale/res. */
-   /*
-    int nb = blobs.size();
-    int res = 10; // subpixels per pixel
-    int filt = 2; // filter half-width in pixels
-    int w_sp = res*(2*filt*(STAGES-1)+1); // size of the array to filter
-    double sp[w_sp];
-    for (int ib = 0; ib < nb; ib++) {
-        // find X centroid
-        // collapse into 1D X array
-        int i_min = blobs[ib].icentroid.x - filt*(STAGES-1);
-        int j_min = blobs[ib].icentroid.y - filt*(STAGES-1);
-
-        for (int i = 0; i <= 2*filt*(STAGES-1); i++) {
-            int i_p = i+i_min;
-            double s = 0.0;
-            for (int j = 0; j<= 2*filt; j++) {
-                int j_p = j+j_min;
-                s += ic[i_p + j_p*w];
-            }
-            for (int k=0; k<res; k++) {
-                sp[i*res + k] = s;
-            }
-        }
-        int max = 0;
-        int i_xmax = Box1DCenter(sp, w_sp, filt, res, max);
-
-        // find Y centroid
-        // collapse into 1D Y array
-        for (int j = 0; j <= 2*filt*(STAGES-1); j++) {
-            int j_p = j+j_min;
-            double s = 0.0;
-            for (int i = 0; i<= 2*filt; i++) {
-                int i_p = i+i_min;
-                s += ic[i_p + j_p*w];
-            }
-            for (int k=0; k<res; k++) {
-                sp[j*res + k] = s;
-            }
-        }
-
-        int i_ymax = Box1DCenter(sp, w_sp, filt, res, max);
-        blobs[ib].totalIntensity = max;
-
-        blobs[ib].centroid.x = blobs[ib].icentroid.x + double(i_xmax - w_sp/2)/double(res)+0.5+double(x_center-x_size);
-        if (subframe) {
-            blobs[ib].centroid.y = blobs[ib].icentroid.y + double(i_ymax - w_sp/2)/double(res)+0.5+double(y_center-y_size);
-        } else {
-            blobs[ib].centroid.y = blobs[ib].icentroid.y + double(i_ymax - w_sp/2)/double(res)+0.5+double(y_center-y_size);
-        }
-    }
-
-    std::sort(blobs.begin(), blobs.end(), blobCompareFunction);
-
-    if (blobs.size()==0) { // no blobs: lets see if it was saturated
-        if (mean_raw>250.0) {
-            B.icentroid.x = (i0+i1)/2;
-            B.icentroid.y = (j0+j1)/2;
-            B.intensity = B.totalIntensity = 100.0*mean_raw;
-            blobs.push_back(B);
-        }
-    }
-    //if (subframe && blobs.size()) printf(" **** found blob in subframe ***\n");
-    /*
-    for(int i = 0; i< blobs.size(); i++){
-        printf("found a blob at %lf, %lf, intensity: %d total intensity: %d\n", blobs[i].centroid.x, blobs[i].centroid.y, blobs[i].intensity, blobs[i].totalIntensity);
-    }
-  */
 }
 
 // sorting implementation
@@ -846,6 +833,11 @@ int makeTable(char * filename, char * blobfile, char * buffer, double * starMag,
 
     fptr = fopen(blobfile, "a");
     fprintf(fptr, "------------------------------------------\n");
+    if (all_blob_params.use_static_hp_mask) {
+        fprintf(fptr, "Using static hot pixel map.\n");
+    } else {
+        fprintf(fptr, "Not using static hot pixel map.\n");
+    }
     for (int i = 0; i < blob_count; i++) {
         fprintf(fp, "%f,%f,%f\n", starMag[i], starX[i], starY[i]);
         // write the specific blob pixel coordinates to a separate data file 
@@ -924,21 +916,26 @@ void doCameraAndAstrometry() {
 
     // testing pictures that have already been taken 
     // loadDummyPicture("/home/xscblast/Desktop/blastcam/BMPs/saved_image_2019-07-01-23-34-22.bmp", memory); 
+    // loadDummyPicture("/home/xscblast/Desktop/blastcam/BMPs/static_hot_pixel_test_2020-03-27_23:08:10.bmp", memory);
+    loadDummyPicture("/home/xscblast/Desktop/blastcam/BMPs/saved_image_2020-03-22_00:05:16.bmp", memory);
+    // for logodds testing:
+    // loadDummyPicture("/home/xscblast/Desktop/blastcam/BMPs/saved_image_2020-03-08_05:54:58.bmp", memory);
     // pointer for transmitting to user should point to where image is in memory
     camera_raw = memory;
 
     // find the blobs in the image
-    int blob_count = get_blobs(memory, CAMERA_WIDTH, CAMERA_HEIGHT, &starX, &starY, &starMag, output_buffer);
+    int blob_count = get_blobs(memory, CAMERA_WIDTH, CAMERA_HEIGHT, &starX, &starY, &starMag, output_buffer, date); // remove date as input once done testing
     /* uncomment to make kst display the filtered image. */
     // memcpy(memory, output_buffer, CAMERA_WIDTH * CAMERA_HEIGHT); 
 
     // save image
     status = is_ImageFile(cameraHandle, IS_IMAGE_FILE_CMD_SAVE, (void*) &ImageFileParams, sizeof(ImageFileParams));
+    // all_blob_params.make_static_hp_mask = 20; // to re-make hp mask again (only for taking dark test images)
     if (status == -1) {
         char * lastErrorString;
         int lastError = 0;
         is_GetError(cameraHandle, &lastError, &lastErrorString);
-        printf("FAILED %s\n", lastErrorString);
+        printf("Failed to save image, error string: %s\n", lastErrorString);
         exit(2);
     }
 
@@ -956,7 +953,6 @@ void doCameraAndAstrometry() {
     if (first_run) {
         // get frame rate again
         is_SetFrameRate(cameraHandle, IS_GET_FRAMERATE, (void *) &actualFPS);
-        printf("Frame rate later on: %f\n", actualFPS);
 
         // write observing information to data file
         strftime(buff, sizeof(buff), "%B %d Observing Session - beginning %H:%M:%S GMT", tm_info); 
@@ -965,12 +961,12 @@ void doCameraAndAstrometry() {
         fprintf(fptr, "----------------------------------------------------\n");
         fprintf(fptr, "Exposure: %f milliseconds\n", currentExposure);
         fprintf(fptr, "Pixel clock: %i\n", currPixelClock);
-        fprintf(fptr, "Frame rate actually achieved (desired value is 10): %f\n", actualFPS);
+        fprintf(fptr, "Frame rate achieved (desired is 10): %f\n", actualFPS);
         fprintf(fptr, "Trigger delay (microseconds): %i\n", currTrigDelay);
         fprintf(fptr, "Current trigger mode setting: %i\n", currExtTrig);
         fprintf(fptr, "Current trigger timeout: %i\n", currTimeout);
-        fprintf(fptr, "Auto shutter (should be disabled): %f\n", currShutter);
-        fprintf(fptr, "Auto frame rate (should be disabled): %f\n", actualAutoFR);
+        fprintf(fptr, "Auto shutter (should be disabled): %.1f\n", currShutter);
+        fprintf(fptr, "Auto frame rate (should be disabled): %.1f\n", actualAutoFR);
         fprintf(fptr, "----------------------------------------------------\n");
         fprintf(fptr, "Sensor ID/type: %hu\n", sensorInfo.SensorID);
         fprintf(fptr, "Sensor color mode (from is_GetSensorInfo and is_SetColorMode): %i / %i\n", sensorInfo.nColorMode, currColorMode);

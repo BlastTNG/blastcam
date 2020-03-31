@@ -7,6 +7,7 @@
 #define MIN_PS 6.0        	// [as/px]
 #define NOM_PS 7.66			    // [as/px]
 #define MAX_PS 8.0			    // [as/px]
+#define STATIC_HP_MASK "/home/xscblast/Desktop/blastcam/static_hp_mask.txt"
 
 extern HIDS cameraHandle;
 
@@ -22,6 +23,8 @@ struct blob_params {
   int filter_return_image; // 1 == true; 0 = false
   float n_sigma; // pixels brighter than this time the noise in the filtered map are blobs (this number * sigma + mean)
   int unique_star_spacing;
+  int make_static_hp_mask; 
+  int use_static_hp_mask;
 };
 #pragma pack(pop)
 

@@ -201,7 +201,7 @@ void *client_handler(void *arg) {
         memcpy(&all_data.cam_settings, &all_camera_params, sizeof(all_camera_params));
         memcpy(&all_data.current_blob_params, &all_blob_params, sizeof(all_blob_params));
 
-        // printf("Size of all_data: %lu\n", sizeof(all_data));
+        printf("Size of all_data: %lu\n", sizeof(all_data));
 
         time_t seconds; 
         seconds = time(NULL); 
