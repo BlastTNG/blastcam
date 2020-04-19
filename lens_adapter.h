@@ -17,7 +17,7 @@ struct camera_params {
   int min_focus_pos;
   int max_focus_pos;
   int current_aperture;
-  // camera parameter, not lens parameter
+  // camera parameter, not lens parameter, but adjustments to it are made in lens_adapter.c
   double exposure_time;
   double change_exposure_bool;
 };
@@ -26,4 +26,4 @@ struct camera_params {
 // make all blob_params acessible from any file that includes camera.h
 extern struct camera_params all_camera_params;
 
-#endif /* LENS_ADAPTER_H */
+#endif 

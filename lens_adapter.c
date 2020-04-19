@@ -1,12 +1,13 @@
 /* HOW TO USE THIS PROGRAM:
 
-This program is designed so that only two-letter functions need to be input to execute commands.
+This program is designed so that only two-letter commands need to be input to execute camera changes.
 e.g., comStatus = runCommand("mi\r", fileDescriptor, returnVal);
-where 'mi' is the function and the only thing that needs to be changed.
+where 'mi' is the command.
 
-All camera settings are listed in the user manual for the camera.
+All camera settings are listed in the Canon EF 232 user manual.
+https://birger.com/products/lens_controller/manuals/canon_ef232/Canon%20EF-232%20Library%20User%20Manual%201.3.pdf
 
-FUNCTIONS:
+COMMANDS:
 	Aperture:
 		in: initialize aperture motor; aperture will fully open
 		da: print aperture information
@@ -22,7 +23,7 @@ FUNCTIONS:
 		ff: fast focus
 		fp: print the raw focus positions
 		la: learn the focus range
-		mf: move focus incremental (mf200 moves the focus by +200, not to +200, mf-200 increments down 200)
+		mf: move focus incremental (mf200 moves the focus by +200, not to +200; mf-200 increments down 200)
 		mi: move focus to the infinity stop
 		mz: move focus to the zero stop
 		pf: print focus position
@@ -52,59 +53,43 @@ FUNCTIONS:
 		we: write non-volatile parameters to EEPROM
 */
 
+// include necessary libraries
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
-#include <time.h>
 #include <string.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <netdb.h>
 #include <errno.h>
-#include <pthread.h>
-#include <sys/time.h>
-#include <dirent.h>
-#include <sched.h>
-#include <sys/mman.h>
 #include <fcntl.h>
-#include <unistd.h>
 #include <termios.h>
 #include <ueye.h>
-#include <stdbool.h>
 
+// include our header files
 #include "lens_adapter.h"
-#include "astrometry.h"
 #include "camera.h"
 
-int runCommand(const char * command, int file, char * returnStr);
+// initialize the camera parameters global structure (defined in camera.h)
+struct camera_params all_camera_params = {
+    .prev_focus_pos = 0,       // need to save previous focus value to determine by how much we need to move in mf command below
+    .focus_position = 0,       // current focus position
+    .focus_inf = 0,            // (bool) default is not to set focus to infinity (ideal position is 80 counts below infinity)
+    .aperture_steps = 0,       // number of aperture steps to shift by in mn command
+    .max_aperture = 0,         // (bool) default is not to maximize aperture, since it will already be maximized from init_camera()
+    .current_aperture = 0,     // current aperture position
+    .min_focus_pos = 0,        // current min focus position (focus range changes with each power cycle of the camera)
+    .max_focus_pos = 0,        // current max focus position
+    .exposure_time = 700,      // current exposure time (700 msec is default)
+    .change_exposure_bool = 0, // don't want to change the exposure from default value unless user commands it
+};
+
 char * returnVal;
 int comStatus;
 char * buffer;
 int fileDescriptor;
-int focus_shift;
-double current_exposure;
+int focusShift;
+double currentExposure;
 
-int dummy_storage;
-
-// initialize the camera parameters global structure
-struct camera_params all_camera_params = {
-    .prev_focus_pos = 0,       // need to save previous focus value to determine by how much we need to move in mf command below
-    .focus_position = 0, 
-    .focus_inf = 0,     
-    .aperture_steps = 0,
-    .max_aperture = 0,         // (bool) default is to maximize aperture
-    // these fields are for information for user GUI, not for changing camera settings
-    .current_aperture = 0,
-    .min_focus_pos = 0,
-    .max_focus_pos = 0,
-    // exposure params
-    .exposure_time = 100,      // 100 msec is default exposure time
-    .change_exposure_bool = 0, // don't want to change the exposure from default value unless user commands it
-};
-
-// initialize the lens adapter and run commands
-int init_lensAdapter (char * path) {
-    // open file descriptor
+// initialize the lens adapter and run commands to achieve default settings
+int init_lensAdapter(char * path) {
+    // open file descriptor with given path
     fileDescriptor = open(path, O_RDWR | O_NOCTTY /*| O_NDELAY*/);
     if (fileDescriptor == -1) {
         printf("Error opening the file descriptor for lens %s; error %d\n", path, errno);
@@ -146,7 +131,8 @@ int init_lensAdapter (char * path) {
     options.c_cc[VMIN] = 0;
     // options.c_iflag |= IGNCR;
 
-    tcsetattr(fileDescriptor, TCSANOW, &options);           // apply changes
+    // apply changes
+    tcsetattr(fileDescriptor, TCSANOW, &options);
 
     // flush the buffer (in case of unclean shutdown)
     if (tcflush(fileDescriptor, TCIOFLUSH) < 0) {
@@ -164,6 +150,7 @@ int init_lensAdapter (char * path) {
     } else {
         printf("Focus moved to desired default position.\n");
     }
+
     // print focus position
     printf("Focus at 80 counts below infinity:\n");
     comStatus = runCommand("fp\r", fileDescriptor, returnVal);
@@ -173,16 +160,19 @@ int init_lensAdapter (char * path) {
 
     // set aperture parameter to maximum
     all_camera_params.max_aperture = 1;
+
     // initialize the aperture motor
     comStatus = runCommand("in\r", fileDescriptor, returnVal);
     if (comStatus == -1) {
         printf("Failed to initialize the motor.\n");
     }
+
     // run the aperture maximization (fully open) command
     comStatus = runCommand("mo\r", fileDescriptor, returnVal);
     if (comStatus == -1) {
         printf("Setting the aperture to maximum fails.\n");
     }
+
     // print aperture position
     comStatus = runCommand("pa\r", fileDescriptor, returnVal);
     if (comStatus == -1) {
@@ -193,8 +183,13 @@ int init_lensAdapter (char * path) {
     return fileDescriptor;
 }
 
+// function handle user commands for changing settings
 void handleFocusAndAperture(int fileDescriptor) {
-    // If user set focus infinity command to true (1), execute this command and none of the other focus commands 
+    // local variables for executing commands
+    char focus_str_cmd[10]; 
+    char aper_str_cmd[4]; 
+
+    // if user set focus infinity command to true (1), execute this command and none of the other focus commands 
     // that would contradict this one
     if (all_camera_params.focus_inf == 1) {
         comStatus = runCommand("mi\r", fileDescriptor, returnVal);
@@ -207,14 +202,13 @@ void handleFocusAndAperture(int fileDescriptor) {
         if (comStatus == -1) {
             printf("Failed to print focus after setting to infinity.\n");
         } 
-    }  else {
-        // calculate the shift needed to get from current focus position to user-specified focus position
-        focus_shift = all_camera_params.focus_position - all_camera_params.prev_focus_pos;
-        printf("Focus change (internal calculation, not command): %i\n", focus_shift);
+    } else {
+        // calculate the shift needed to get from current focus position to user-specified position
+        focusShift = all_camera_params.focus_position - all_camera_params.prev_focus_pos;
+        printf("Focus change (internal calculation, not command): %i\n", focusShift);
 
-        char focus_str_cmd[10]; // (4 characters for "mf +" and then 6 for 6 digits of precision in focus shift number)
-        if (focus_shift != 0) {
-            sprintf(focus_str_cmd, "mf %i\r", focus_shift);
+        if (focusShift != 0) {
+            sprintf(focus_str_cmd, "mf %i\r", focusShift);
             // shift the focus 
             comStatus = runCommand(focus_str_cmd, fileDescriptor, returnVal);
             if (comStatus == -1) {
@@ -232,6 +226,8 @@ void handleFocusAndAperture(int fileDescriptor) {
 
     // if the user wants to set the aperture to the maximum
     if (all_camera_params.max_aperture == 1) {
+        // might as well change struct field here since we know what the maximum aperture position is
+        // (don't have to get it with pa command)
         all_camera_params.current_aperture = 28;
         comStatus = runCommand("mo\r", fileDescriptor, returnVal); 
         if (comStatus == -1) {
@@ -240,10 +236,8 @@ void handleFocusAndAperture(int fileDescriptor) {
             printf("Set aperture to maximum.\n");
         }
     } else {
-        char aper_str_cmd[4]; 
         if (all_camera_params.aperture_steps != 0) {
             sprintf(aper_str_cmd, "mn%i\r", all_camera_params.aperture_steps);
-            printf("%s\n", aper_str_cmd);
             // perform the aperture command
             comStatus = runCommand(aper_str_cmd, fileDescriptor, returnVal);
             if (comStatus == -1) {
@@ -251,7 +245,7 @@ void handleFocusAndAperture(int fileDescriptor) {
             } else {
                 printf("Adjusted the aperture successfully.\n");
             }
-            // print aperture position
+            // print new aperture position
             comStatus = runCommand("pa\r", fileDescriptor, returnVal);
             if (comStatus == -1) {
                 printf("Failed to print the new aperture position.\n");
@@ -262,22 +256,20 @@ void handleFocusAndAperture(int fileDescriptor) {
         }
     }
 
-    // change the exposure if the user commanded it
     if (all_camera_params.change_exposure_bool) {
-        printf("Adjusting exposure in lens_adapter.c.\n");
-        // change boolean to 0 so exposure isn't adjusted again until sends another command
+        // change boolean to 0 so exposure isn't adjusted again until user sends another command
         all_camera_params.change_exposure_bool = 0;
-        // run ueye function to update camera exposure
+        // run uEye function to update camera exposure
         if (is_Exposure(cameraHandle, IS_EXPOSURE_CMD_SET_EXPOSURE, (void *) &all_camera_params.exposure_time, sizeof(double)) != IS_SUCCESS) {
             printf("Adjusting exposure to user command unsuccessful.\n");
         }
-        // check with current_exposure that exposure has been adjusted to desired value
-        is_Exposure(cameraHandle, IS_EXPOSURE_CMD_GET_EXPOSURE, &current_exposure, sizeof(double));
-        printf("Exposure is now %f msec.\n", current_exposure);
+        // check with currentExposure that exposure has been adjusted to desired value
+        is_Exposure(cameraHandle, IS_EXPOSURE_CMD_GET_EXPOSURE, &currentExposure, sizeof(double));
+        printf("Exposure is now %f msec.\n", currentExposure);
     }
 }
 
-// defines runCommand() to execute built-in camera commands
+// function to execute built-in camera commands
 int runCommand(const char * command, int file, char * returnStr){
     fd_set input, output;
     FD_ZERO(&output);
@@ -315,27 +307,29 @@ int runCommand(const char * command, int file, char * returnStr){
 
     buffer[99] = '\0';
     buffer[status] = '\0';	
-
     if (strstr(buffer, "ERR") != NULL) {
         printf("Read returned error %s.\n", buffer);
         return -1;
-    } else if (strstr(buffer, "OK") != NULL) {
-        // printf("getting ok in runcommand, length %d, buffer contents:%send\n", status, buffer);
     }
     
+    // copy buffer over to returnStr for printing to terminal
     strcpy(returnStr, buffer);
-
     if (strcmp(command, "fp\r") == 0) {
         printf("%s\n", returnStr);
-        sscanf(returnStr, "fp\nOK\nfmin:%d  fmax:%d  current:%i %*s", &all_camera_params.min_focus_pos, &all_camera_params.max_focus_pos, &all_camera_params.focus_position);
+        // parse the returnStr for new focus range numbers
+        sscanf(returnStr, "fp\nOK\nfmin:%d  fmax:%d  current:%i %*s", &all_camera_params.min_focus_pos, 
+                                                                      &all_camera_params.max_focus_pos, 
+                                                                      &all_camera_params.focus_position);
         printf("in camera params, min focus pos is: %i\n", all_camera_params.min_focus_pos);
         printf("in camera params, max focus pos is: %i\n", all_camera_params.max_focus_pos);
         printf("in camera params, curr focus pos is: %i\n", all_camera_params.focus_position);
         printf("in camera params, prev focus pos was: %i\n", all_camera_params.prev_focus_pos);
+        // update previous focus position to current one 
         all_camera_params.prev_focus_pos = all_camera_params.focus_position;
         printf("in camera params, prev focus pos is now: %i\n", all_camera_params.prev_focus_pos);
     } else if (strcmp(command, "pa\r") == 0) {
         printf("%s\n", returnStr);
+        // store the current aperture from the returnStr in all_camera_params struct
         if (strncmp(returnStr, "pa\nOK\nDONE", 10) == 0) {
             sscanf(returnStr, "pa\nOK\nDONE%*i,f%d", &all_camera_params.current_aperture);
         } else if (strncmp(returnStr, "pa\nOK\n", 6) == 0) {
