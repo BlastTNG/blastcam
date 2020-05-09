@@ -287,7 +287,7 @@ void set_camera_params(unsigned int cameraHandle) {
     printf("Black level offset (desired is 50): %i\n", actualBLOffset);
 
     // This for some reason actually affects the time it takes to set aois only on the focal plane camera. 
-    // Don't use if for the trigger timeout. It is also not in milliseconds.
+    // Don't use if for the trigger timeout. 
     status = is_SetTimeout(cameraHandle, IS_TRIGGER_TIMEOUT, 500);
     if (status != IS_SUCCESS) {
         printf("Setting trigger timeout fails with status %d.\n", status);
@@ -621,13 +621,13 @@ int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** star
     makeMask(input_buffer, i0, j0, i1, j1, 0, 0, 0);
 
     double sx = 0, sx2 = 0;
-    double sx_raw = 0; // sum of non-highpass filtered field
+    double sx_raw = 0;                            // sum of non-highpass filtered field
     int num_pix = 0;
 
     // lowpass filter the image - reduce noise.
     boxcarFilterImage(input_buffer, i0, j0, i1, j1, all_blob_params.r_smooth, ic);
 
-    if (all_blob_params.high_pass_filter) { // only high-pass filter full frames
+    if (all_blob_params.high_pass_filter) {       // only high-pass filter full frames
         b += all_blob_params.r_high_pass_filter;
         boxcarFilterImage(input_buffer, i0, j0, i1, j1, all_blob_params.r_high_pass_filter, ic2);
 
@@ -663,6 +663,7 @@ int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** star
         if (all_blob_params.high_pass_filter) pixel_offset = 50;
 
         if (all_blob_params.filter_return_image) {
+            printf("Filtering returned image...\n");
             for (int j = j0 + 1; j < j1 - 1; j++) {
                 for (int i = i0 + 1; i < i1 - 1; i++) {
                   output_buffer[i + j*w] = ic[i + j*w]+pixel_offset;
@@ -679,6 +680,7 @@ int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** star
                 }
             }
         } else {
+            printf("Not filtering the returned image...\n");
             for (int j = j0; j < j1; j++) {
                 for (int i = i0; i < i1; i++) {
                   int idx = i + j*w;
@@ -856,7 +858,7 @@ int makeTable(char * filename, char * blobfile, char * buffer, double * starMag,
 }
 
 void doCameraAndAstrometry() {
-    static int ind = 1;
+    // static int ind = 1;
     // for testing purposes (below)
     int stop = 1; 
     // starX, starY, and starMag get allocated and set in get_blobs()
@@ -872,6 +874,8 @@ void doCameraAndAstrometry() {
     wchar_t filename[200] = L"";
     // leap year boolean
     int leap_year;
+    // for timing how long the camera takes to operate (end of exposure to after solving finishes)
+    struct timespec camera_tp_beginning, camera_tp_end; 
 
     // uncomment line below for testing the values of each field in the global structure for blob_params
     verifyBlobParams();
@@ -881,20 +885,20 @@ void doCameraAndAstrometry() {
     }
 
     // set up time
-    // time_t seconds = time(NULL);
-    c_time = c_time_arr[ind];
-    currDEC = DEC_arr[ind];
-    currRA = RA_arr[ind];
+    // c_time = c_time_arr[ind];
+    // currDEC = DEC_arr[ind];
+    // currRA = RA_arr[ind];
     // curr_dut1 = DUT1_arr[ind];
-    curr_dut1 = -0.2;
-    ind++;
+    curr_dut1 = -0.23;
+    // ind++;
 
-    printf("\n");
-    printf("Current index: %i\n", ind);
-    printf("Current c time: %i, current RA %f, current DEC %f, current dut1 %.15f\n", c_time, currRA, currDEC, curr_dut1);
-    printf("\n");
+    // printf("\n");
+    // printf("Current index: %i\n", ind);
+    // printf("Current c time: %i, current RA %f, current DEC %f, current dut1 %.15f\n", c_time, currRA, currDEC, curr_dut1);
+    // printf("\n");
 
-    time_t seconds = c_time;
+    // time_t seconds = c_time;
+    time_t seconds = time(NULL);
     struct tm * tm_info;
     tm_info = gmtime(&seconds);
     all_astro_params.rawtime = seconds;
@@ -915,6 +919,10 @@ void doCameraAndAstrometry() {
     // captures an image 
     // printf("Taking a new image...\n");
     // status = is_FreezeVideo(cameraHandle, IS_WAIT);
+    // get current time right after exposure
+    if (clock_gettime(CLOCK_REALTIME, &camera_tp_beginning) == -1) {
+        printf("Error occurred when calling clock_gettime(), error # %d\n", errno);
+    }
     // if (status == -1) {
     //   printf("Failed to capture image.");
     //   exit(2);
@@ -930,15 +938,15 @@ void doCameraAndAstrometry() {
     // testing pictures that have already been taken 
     // loadDummyPicture(L"/home/xscblast/Desktop/blastcam/BMPs/saved_image_2019-07-01-23-34-22.bmp", &memory); 
     // loadDummyPicture(L"/home/xscblast/Desktop/blastcam/BMPs/static_hot_pixel_test_2020-03-27_21:49:07.bmp", &memory);
-    // loadDummyPicture(L"/home/xscblast/Desktop/blastcam/BMPs/saved_image_2020-04-12_02:15:09.bmp", &memory);
-    loadDummyPicture(L"/home/xscblast/Desktop/blastcam/BMPs/saved_image_2020-03-08_05:54:58.bmp", &memory);
+    loadDummyPicture(L"/home/xscblast/Desktop/blastcam/BMPs/saved_image_2020-04-22_02:00:59.bmp", &memory);
+    // loadDummyPicture(L"/home/xscblast/Desktop/blastcam/BMPs/saved_image_2020-03-08_05:54:58.bmp", &memory);
 
     // find the blobs in the image
     int blob_count = get_blobs(memory, CAMERA_WIDTH, CAMERA_HEIGHT, &starX, &starY, &starMag, output_buffer);
     // kst displays the filtered image 
     memcpy(memory, output_buffer, CAMERA_WIDTH*CAMERA_HEIGHT); 
     // pointer for transmitting to user should point to where image is in memory
-    camera_raw = memory;
+    camera_raw = output_buffer;
 
     // save image
     ImageFileParams.pwchFileName = filename;
@@ -995,7 +1003,7 @@ void doCameraAndAstrometry() {
         fprintf(fptr, "Black level offset (desired is 50): %i\n", actualBLOffset);
 
         // write header to data file
-        fprintf(fptr, "\nBlob #|C time|GMT|Julian date|LST (deg)|RA (deg)|DEC (deg)|FR (deg)|PS|ALT (deg)|AZ (deg)|IR (deg)|Solve time (msec)");
+        fprintf(fptr, "\nC time|GMT|Blob #|RA (deg)|DEC (deg)|FR (deg)|PS|ALT (deg)|AZ (deg)|IR (deg)|Astrom. solve time (msec)|Camera time (msec)");
     
         // reset buffer for later writing
         memset(buff, 0, sizeof(buff));
@@ -1006,7 +1014,8 @@ void doCameraAndAstrometry() {
 
     // write blob and time information to data file
     strftime(buff, sizeof(buff), "%b %d %H:%M:%S", tm_info); 
-    fprintf(fptr, "\r%li|", seconds);
+    printf("Time going into lost_in_space_astrometry: %s\n", buff);
+    fprintf(fptr, "\r%li|%s|", seconds, buff);
     fclose(fptr);
 
     // make a table of the blobs for kst2
@@ -1016,14 +1025,32 @@ void doCameraAndAstrometry() {
     // solve astrometry
     printf("Trying to solve astrometry...\n");
     status = lost_in_space_astrometry(starX, starY, starMag, blob_count, tm_info, datafile);
+    // get current time right after solving
+    if (clock_gettime(CLOCK_REALTIME, &camera_tp_end) == -1) {
+        printf("Error occurred when calling clock_gettime(), error # %d\n", errno);
+    }
+
+    // calculate time it took camera program to run
+    long camera_sec = camera_tp_end.tv_sec - camera_tp_beginning.tv_sec;
+    long camera_nanosec = camera_tp_end.tv_nsec - camera_tp_beginning.tv_nsec;
+    // handle clock underflow
+    if (camera_tp_beginning.tv_nsec > camera_tp_end.tv_nsec) {
+        --camera_sec;
+        camera_nanosec += 1000000000;
+    }
+    double camera_time = (double) camera_sec + ((double) camera_nanosec/ (double) 1000000000);
+    printf("Camera program took %f seconds to solve.\n", camera_time);
+    fptr = fopen(datafile, "a");
+    fprintf(fptr, "|%f", camera_time*1000.0);
+    fclose(fptr);
 
     if (status) {
         // change to 0 to make loop stop on solve (for testing a single solution)
         stop = 1;
-        if (ind == 2459) {
-            printf("At end of April 12 data, finishing...\n");
-            clean_up();
-        }
+        // if (ind == 2459) {
+        //     printf("At end of April 12 data, finishing...\n");
+        //     clean_up();
+        // }
     } else {
         printf("Could not solve astrometry.\n");
     }

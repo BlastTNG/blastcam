@@ -76,7 +76,7 @@ struct camera_params all_camera_params = {
     .current_aperture = 0,     // current aperture position
     .min_focus_pos = 0,        // current min focus position (focus range changes with each power cycle of the camera)
     .max_focus_pos = 0,        // current max focus position
-    .exposure_time = 700,      // current exposure time (700 msec is default)
+    .exposure_time = 800,      // current exposure time (700 msec is default)
     .change_exposure_bool = 0, // don't want to change the exposure from default value unless user commands it
 };
 

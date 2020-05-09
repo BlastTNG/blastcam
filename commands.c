@@ -251,12 +251,12 @@ int main() {
 
     // make socket non-blocking (times out after a certain time, 3 sec)
     struct timeval read_timeout;
-    read_timeout.tv_sec = 3;
+    read_timeout.tv_sec = 2.5;
     read_timeout.tv_usec = 0;
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &read_timeout, sizeof(read_timeout));
 
     // initialize the camera (inputs: 1 = load previous observing data for testing, 0 = take new data)
-    init_camera(1);
+    init_camera(0);
 
     // initialize the lens adapter
     int fileDescriptor = init_lensAdapter("/dev/ttyLens");

@@ -5,8 +5,7 @@
 #define CAMERA_HEIGHT 1216	   // [px]
 #define CAMERA_MARGIN 0		     // [px]
 #define MIN_PS        6.0      // [arcsec/px]
-#define NOM_PS        7.66     // [arcsec/px]
-#define MAX_PS        8.0		   // [arcsec/px]
+#define MAX_PS        6.5		   // [arcsec/px]
 #define STATIC_HP_MASK "/home/xscblast/Desktop/blastcam/static_hp_mask.txt"
 
 extern HIDS cameraHandle;
