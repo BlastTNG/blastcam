@@ -18,49 +18,50 @@
 void merge(double A[], int p, int q, int r, double X[],double Y[]);
 void part(double A[], int p, int r, double X[], double Y[]);
 
-HIDS cameraHandle = 12;            // set by ueyesetid
-IS_POINT_2D locationRectangle;
+HIDS camera_handle = 12;            // set by ueyesetid
+IS_POINT_2D location_rectangle;
+// breaking our convention of using underscores for struct names because this is how iDS does it in their documentation
 IMAGE_FILE_PARAMS ImageFileParams;
+// same with sensorInfo struct
 SENSORINFO sensorInfo;
 FILE * fptr;
 
 // global variables
-int bufferNumber = 0;
-char * memory = NULL;
-char * waitingMem = NULL;
-int status;                        // variable to verify completion of methods
-extern int shutting_down;
-unsigned char * mask = NULL;
-char * memoryStartingPointer;
-int memoryId;
-// for writing camera settings to observing file
-double currentExposure;
-int currPixelClock;
-double actualFPS;
-double currAutoGain;
-double currShutter;
-double actualAutoFR;
-int currColorMode;
-int currExtTrig;
-int currTrigDelay;
-int currMasterGain;
-int currRedGain;
-int currGreenGain;
-int currBlueGain;
-int currGamma;
-int currGainBoost;
-unsigned int currTimeout;
-int actualBLOffset;
-int actualBLMode;
+int buffer_num;
+char * memory;
+char * waiting_mem;
+int status;                         // variable to verify completion of methods
+int shutting_down;
+unsigned char * mask;
+char * mem_starting_ptr;
+int mem_id;
+// for writing camera settings to observing file ('curr' = current, 'pc' = pixel clock, 'fps' = frames per sec,
+// 'ag' = auto gain, 'bl' = black level)
+double curr_exposure;
+int curr_pc;
+double actual_fps;
+double curr_ag;
+double curr_shutter;
+double auto_fr;
+int curr_color_mode;
+int curr_ext_trig;
+int curr_trig_delay;
+int curr_master_gain;
+int curr_red_gain;
+int curr_green_gain;
+int curr_blue_gain;
+int curr_gamma;
+int curr_gain_boost;
+unsigned int curr_timeout;
+int bl_offset;
+int bl_mode;
 
 // variables for reading in previous observing data 
-double RA_arr[2460];
-double DEC_arr[2460];
+double ra_arr[2460];
+double dec_arr[2460];
 int c_time_arr[2460];
-double DUT1_arr[2460];
-double currRA, currDEC;
+double curr_ra, curr_dec;
 int c_time;
-double curr_dut1;
 
 // initialize global struct for blob parameters with default values
 struct blob_params all_blob_params = {
@@ -92,7 +93,7 @@ int isLeapYear(int year) {
 
 // helper function to test blob-finding parameters
 void verifyBlobParams() {
-    printf("in camera.c, all_blob_params.spike_limit is: %d\n", all_blob_params.spike_limit);
+    printf("\nin camera.c, all_blob_params.spike_limit is: %d\n", all_blob_params.spike_limit);
     printf("in camera.c, all_blob_params.dynamic_hot_pixels is: %d\n", all_blob_params.dynamic_hot_pixels);
     printf("in camera.c, all_blob_params.centroid_search_border is: %d\n", all_blob_params.centroid_search_border);
     printf("in camera.c, all_blob_params.high_pass_filter is: %d\n", all_blob_params.high_pass_filter);
@@ -102,283 +103,289 @@ void verifyBlobParams() {
     printf("in camera.c, all_blob_params.n_sigma is: %f\n", all_blob_params.n_sigma);
     printf("in camera.c, all_blob_params.unique_star_spacing is: %d\n", all_blob_params.unique_star_spacing);
     printf("in camera.c, all_blob_params.make_static_hp_mask is: %i\n", all_blob_params.make_static_hp_mask);
-    printf("in camera.c, all_blob_params.use_static_hp_mask is: %i\n", all_blob_params.use_static_hp_mask);
+    printf("in camera.c, all_blob_params.use_static_hp_mask is: %i\n\n", all_blob_params.use_static_hp_mask);
 }
 
 // initialize the camera (and load previous observing data if desired)
-void init_camera(int loadPrevData) {
+int initCamera(int load_prev_data) {
     // local variables for reading in previous observing data
-    FILE * obsfile = NULL;
-    FILE * dut1file = NULL;
-    char * obsline = NULL;
-    char * dut1line = NULL;
-    size_t obslen = 0;
-    size_t dut1len = 0;
-    int obsread = 0;
-    int dut1read = 0;
+    FILE * obsfile;
+    char * obsline;
+    size_t obslen;
+    int obsread;
     int c_time, index, index2;
-    double ra, dec, dut1;
-
+    double ra, dec;
     // local variables for exposure parameters
     double min_exposure;
     double max_exposure;
-    double exposure_step_size;
-
     // flag to enable long exposures
     unsigned int enable = 1;   
 
     // load the camera parameters
-    load_camera();  
+    loadCamera();  
 
     // enable long exposure 
-    status = is_Exposure(cameraHandle, IS_EXPOSURE_CMD_SET_LONG_EXPOSURE_ENABLE, (void *) &enable, sizeof(unsigned int));
-    // set exposure time based on struct field
-    status = is_Exposure(cameraHandle, IS_EXPOSURE_CMD_SET_EXPOSURE, (void *) &all_camera_params.exposure_time, sizeof(double));
-    // get current exposure, max possible exposure (with long exposure enabled), and min exposure
-    status = is_Exposure(cameraHandle, IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE_MIN, &min_exposure, sizeof(double));
-    status = is_Exposure(cameraHandle, IS_EXPOSURE_CMD_GET_EXPOSURE, &currentExposure, sizeof(double));
-    status = is_Exposure(cameraHandle, IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE_MAX, &max_exposure, sizeof(double));
-  
-	if (status != IS_SUCCESS) {
-		printf("Setting the exposure time fails.\n");
-	} else {
-        printf("Current exposure time: %f msec | Min possible exposure: %f msec | Max possible exposure: %f msec\n", 
-                currentExposure, min_exposure, max_exposure);
+    if (is_Exposure(camera_handle, IS_EXPOSURE_CMD_SET_LONG_EXPOSURE_ENABLE, (void *) &enable, sizeof(unsigned int)) != IS_SUCCESS) {
+        fprintf(stderr, "Unable to enable long exposure: %s.\n", strerror(errno));
     }
 
-    // initializes astrometry
-    init_astrometry();
+    // set exposure time based on struct field
+    if (is_Exposure(camera_handle, IS_EXPOSURE_CMD_SET_EXPOSURE, (void *) &all_camera_params.exposure_time, sizeof(double)) != IS_SUCCESS) {
+        fprintf(stderr, "Unable to set exposure to desired value: %s.\n", strerror(errno));
+    }
 
-    // sets save image params
-	saveImage();
+    // get current exposure, max possible exposure (with long exposure enabled), and min exposure
+    if (is_Exposure(camera_handle, IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE_MIN, &min_exposure, sizeof(double)) != IS_SUCCESS) {
+        fprintf(stderr, "Unable to get minimum exposure value: %s.\n", strerror(errno));
+    }
+
+    if (is_Exposure(camera_handle, IS_EXPOSURE_CMD_GET_EXPOSURE, &curr_exposure, sizeof(double)) != IS_SUCCESS) {
+        fprintf(stderr, "Unable to get current exposure value: %s.\n", strerror(errno));
+    }
+
+    if (is_Exposure(camera_handle, IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE_MAX, &max_exposure, sizeof(double)) != IS_SUCCESS) {
+        fprintf(stderr, "Unable to get maximum exposure value: %s.\n", strerror(errno));
+    } else {
+        printf("Current exposure time: %f msec | Min possible exposure: %f msec | Max possible exposure: %f msec\n\n", 
+                curr_exposure, min_exposure, max_exposure);
+    }
+
+    // initialize astrometry
+    if (initAstrometry() < 0) {
+        return -1;
+    }
+
+    // set how images are saved
+	setSaveImage();
 
     // load in previous observing data
-    if (loadPrevData) {
+    if (load_prev_data) {
         obsfile = fopen("/home/xscblast/Desktop/blastcam/observing_output/Apr12_Observing.txt", "r");
         if (obsfile == NULL) {
-            printf("Could not open observing file.\n");
-            exit(1);
-        }
-
-        dut1file = fopen("/home/xscblast/Desktop/blastcam/Apr12_DUT1.txt", "r");
-        if (dut1file == NULL) {
-            printf("Could not open DUT1 file.\n");
+            fprintf(stderr, "Could not open observing file: %s.\n", strerror(errno));
+            return -1;
         }
 
         // read every line in the files
-        while (((obsread = getline(&obsline, &obslen, obsfile)) != -1) && 
-               ((dut1read = getline(&dut1line, &dut1len, dut1file)) != -1)) {
+        while ((obsread = getline(&obsline, &obslen, obsfile)) != -1) {
             sscanf(obsline, "%i,%lf,%lf", &c_time, &ra, &dec);
-            sscanf(dut1line, "%lf", &dut1);
-            printf("C time read in: %i, RA read in: %f, DEC read in: %f, DUT1 read in: %.15f\n", c_time, ra, dec, dut1);
-            RA_arr[index] = ra;
-            DEC_arr[index] = dec;
+            printf("C time read in: %i, RA read in: %f, DEC read in: %f", c_time, ra, dec);
+            ra_arr[index] = ra;
+            dec_arr[index] = dec;
             c_time_arr[index] = c_time;
-            DUT1_arr[index] = dut1;
             index++;
         }
         fflush(obsfile);
         fclose(obsfile);
-        fflush(dut1file);
-        fclose(dut1file);
     }
+
+    return 1;
 }
 
-// cleaning_up function for ctrl+c exception
-void clean_up() {
+// cleaning up function for ctrl+c exception
+void clean() {
     printf("\ncommands.c terminated, performing clean-up.\n");
     // camera is in shutting down state (stop solving)
     shutting_down = 1;
-    is_FreeImageMem(cameraHandle, memoryStartingPointer, memoryId);
-    is_ExitCamera(cameraHandle);
-    exit(0);
+    is_FreeImageMem(camera_handle, mem_starting_ptr, mem_id);
+    is_ExitCamera(camera_handle);
+    exit(2);
 }
 
-// sets starting values for certain camera atributes
-void set_camera_params(unsigned int cameraHandle) {
+// set starting values for certain camera atributes
+void setCameraParams(unsigned int camera_handle) {
+    // explicitly set these to 0 in initialization to emphasize disabling purpose
+    double ag = 0;            // auto gain
+    double auto_shutter = 0;
+    double afr = 0;           // auto frame rate
+    int blo;                  // black level offset
+    int blm;                  // black level mode
+
     // set the trigger delay to 0 (microseconds) = deactivates trigger delay
-	status = is_SetTriggerDelay(cameraHandle, 0); 
+	status = is_SetTriggerDelay(camera_handle, 0); 
     if (status != IS_SUCCESS) {
-        printf("Setting the trigger delay to 0 microsec failed.\n");
+        fprintf(stderr, "Setting the trigger delay to 0 microseconds failed: %s.\n", strerror(errno));
     }
     // check the trigger delay is 0
-    currTrigDelay = is_SetTriggerDelay(cameraHandle, IS_GET_TRIGGER_DELAY); 
-    printf("Trigger delay (should be 0): %i\n", currTrigDelay);
+
+    curr_trig_delay = is_SetTriggerDelay(camera_handle, IS_GET_TRIGGER_DELAY); 
+    printf("Trigger delay (should be 0): %i\n", curr_trig_delay);
 
     // set camera integrated amplifier 
-    status = is_SetHardwareGain(cameraHandle, 0, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER);
+    status = is_SetHardwareGain(camera_handle, 0, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER);
     if (status != IS_SUCCESS) {
         printf("Setting gain failed.\n");
     }
     // check color gains
-    currMasterGain = is_SetHardwareGain(cameraHandle, IS_GET_MASTER_GAIN, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER);
-    currRedGain = is_SetHardwareGain(cameraHandle, IS_IGNORE_PARAMETER, IS_GET_RED_GAIN, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER);
-    currGreenGain = is_SetHardwareGain(cameraHandle, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_GET_GREEN_GAIN, IS_IGNORE_PARAMETER);
-    currBlueGain = is_SetHardwareGain(cameraHandle, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_GET_BLUE_GAIN);
+    curr_master_gain = is_SetHardwareGain(camera_handle, IS_GET_MASTER_GAIN, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER);
+    curr_red_gain = is_SetHardwareGain(camera_handle, IS_IGNORE_PARAMETER, IS_GET_RED_GAIN, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER);
+    curr_green_gain = is_SetHardwareGain(camera_handle, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_GET_GREEN_GAIN, IS_IGNORE_PARAMETER);
+    curr_blue_gain = is_SetHardwareGain(camera_handle, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_GET_BLUE_GAIN);
     printf("Gain settings: %i for master gain, %i for red gain, %i for green gain, and %i for blue gain.\n", 
-            currMasterGain, currRedGain, currGreenGain, currBlueGain);
+            curr_master_gain, curr_red_gain, curr_green_gain, curr_blue_gain);
 
     // disable camera's auto gain (0 = disabled)
-    double autoGain = 0;
-    status = is_SetAutoParameter(cameraHandle, IS_SET_ENABLE_AUTO_GAIN, &autoGain, NULL);
+    status = is_SetAutoParameter(camera_handle, IS_SET_ENABLE_AUTO_GAIN, &ag, NULL);
     if (status != IS_SUCCESS) {
         printf("Disabling auto gain fails.\n");
     }
     // check auto gain is off
-    is_SetAutoParameter(cameraHandle, IS_GET_ENABLE_AUTO_GAIN, &currAutoGain, NULL);
-    printf("Auto gain (should be disabled): %f\n", currAutoGain);
+    is_SetAutoParameter(camera_handle, IS_GET_ENABLE_AUTO_GAIN, &curr_ag, NULL);
+    printf("Auto gain (should be disabled): %f\n", curr_ag);
 
     // set camera's gamma value to off 
-    status = is_SetHardwareGamma(cameraHandle, IS_SET_HW_GAMMA_OFF);
+    status = is_SetHardwareGamma(camera_handle, IS_SET_HW_GAMMA_OFF);
     if (status != IS_SUCCESS) {
         printf("Disabling hardware gamma corection fails.\n");
     }
     // check hardware gamma is off
-    currGamma = is_SetHardwareGamma(cameraHandle, IS_GET_HW_GAMMA);
-    printf("Hardware gamma (should be off): %i\n", currGamma);
+    curr_gamma = is_SetHardwareGamma(camera_handle, IS_GET_HW_GAMMA);
+    printf("Hardware gamma (should be off): %i\n", curr_gamma);
 
     // disable auto shutter
-    double autoShutter = 0;
-    status = is_SetAutoParameter(cameraHandle, IS_SET_ENABLE_AUTO_SHUTTER, &autoShutter, NULL);
+    status = is_SetAutoParameter(camera_handle, IS_SET_ENABLE_AUTO_SHUTTER, &auto_shutter, NULL);
     if (status != IS_SUCCESS) {
         printf("Disabling auto shutter speed fails.\n");
     }
     // check auto shutter is off
-    is_SetAutoParameter(cameraHandle, IS_GET_ENABLE_AUTO_SHUTTER, &currShutter, NULL);
-    printf("Auto shutter (should be off): %.1f\n", currShutter);
+    is_SetAutoParameter(camera_handle, IS_GET_ENABLE_AUTO_SHUTTER, &curr_shutter, NULL);
+    printf("Auto shutter (should be off): %.1f\n", curr_shutter);
 
     // disable auto frame rate
-    double autoFramerate = 0;
-    status = is_SetAutoParameter(cameraHandle, IS_SET_ENABLE_AUTO_FRAMERATE, &autoFramerate, NULL);
+    status = is_SetAutoParameter(camera_handle, IS_SET_ENABLE_AUTO_FRAMERATE, &afr, NULL);
     if (status != IS_SUCCESS) {
         printf("Disabling auto framerate fails.\n");
     }
     // check auto frame rate is off
-    is_SetAutoParameter(cameraHandle, IS_GET_ENABLE_AUTO_FRAMERATE, &actualAutoFR, NULL);
-    printf("Auto frame rate (should be off): %.1f\n", actualAutoFR);
+    is_SetAutoParameter(camera_handle, IS_GET_ENABLE_AUTO_FRAMERATE, &auto_fr, NULL);
+    printf("Auto frame rate (should be off): %.1f\n", auto_fr);
 
     // disable gain boost to reduce noise
-    status = is_SetGainBoost(cameraHandle, IS_SET_GAINBOOST_OFF);
+    status = is_SetGainBoost(camera_handle, IS_SET_GAINBOOST_OFF);
     if (status != IS_SUCCESS) {
         printf("Disabling gain boost fails.\n");
     }
     // check gain boost is off
-    currGainBoost = is_SetGainBoost(cameraHandle, IS_GET_GAINBOOST);
-    printf("Gain boost (should be disabled): %i\n", currGainBoost);	
+    curr_gain_boost = is_SetGainBoost(camera_handle, IS_GET_GAINBOOST);
+    printf("Gain boost (should be disabled): %i\n", curr_gain_boost);	
 
     // turn off auto black level
-    int blackLevelMode = IS_AUTO_BLACKLEVEL_OFF;
-    status = is_Blacklevel(cameraHandle, IS_BLACKLEVEL_CMD_SET_MODE, (void *) &blackLevelMode, sizeof(blackLevelMode));
+    blm = IS_AUTO_BLACKLEVEL_OFF;
+    status = is_Blacklevel(camera_handle, IS_BLACKLEVEL_CMD_SET_MODE, (void *) &blm, sizeof(blm));
     if (status != IS_SUCCESS) {
         printf("Turning off auto black level mode fails, status %d.\n", status);
     }
     // check auto black level is off
-    actualBLMode = is_Blacklevel(cameraHandle, IS_BLACKLEVEL_CMD_GET_MODE, (void *) &actualBLMode, sizeof(actualBLMode));
-    printf("Auto black level (should be off): %i\n", actualBLMode);
+    bl_mode = is_Blacklevel(camera_handle, IS_BLACKLEVEL_CMD_GET_MODE, (void *) &bl_mode, sizeof(bl_mode));
+    printf("Auto black level (should be off): %i\n", bl_mode);
 
     // set black level offset to 50
-    int blackLevelOffset = 50;
-    status = is_Blacklevel(cameraHandle, IS_BLACKLEVEL_CMD_SET_OFFSET, (void *) &blackLevelOffset, sizeof(blackLevelOffset));
+    blo = 50;
+    status = is_Blacklevel(camera_handle, IS_BLACKLEVEL_CMD_SET_OFFSET, (void *) &blo, sizeof(blo));
     if (status != IS_SUCCESS) {
         printf("Setting black level offset to 50 fails, status %d.\n", status);
     }
     // check black level offset
-    is_Blacklevel(cameraHandle, IS_BLACKLEVEL_CMD_GET_OFFSET, (void *) &actualBLOffset, sizeof(actualBLOffset));
-    printf("Black level offset (desired is 50): %i\n", actualBLOffset);
+    is_Blacklevel(camera_handle, IS_BLACKLEVEL_CMD_GET_OFFSET, (void *) &bl_offset, sizeof(bl_offset));
+    printf("Black level offset (desired is 50): %i\n", bl_offset);
 
     // This for some reason actually affects the time it takes to set aois only on the focal plane camera. 
     // Don't use if for the trigger timeout. 
-    status = is_SetTimeout(cameraHandle, IS_TRIGGER_TIMEOUT, 500);
+    status = is_SetTimeout(camera_handle, IS_TRIGGER_TIMEOUT, 500);
     if (status != IS_SUCCESS) {
         printf("Setting trigger timeout fails with status %d.\n", status);
     }
     // check time out
-    is_GetTimeout(cameraHandle, IS_TRIGGER_TIMEOUT, &currTimeout);
-    printf("Current trigger timeout: %i\n", currTimeout);
+    is_GetTimeout(camera_handle, IS_TRIGGER_TIMEOUT, &curr_timeout);
+    printf("Current trigger timeout: %i\n", curr_timeout);
 }
 
 // load the camera
-int load_camera() {
+int loadCamera() {
+    int color_depth;
+    void * active_mem_loc;
+    int pixelclock;
+    double fps;
+
     // initialize camera
-	if ((status = is_InitCamera(&cameraHandle, NULL)) != IS_SUCCESS){
+	if ((status = is_InitCamera(&camera_handle, NULL)) != IS_SUCCESS){
         printf("Camera initialization failed, error number: %d\n", errno);
         exit(2);
 	}
   
     // get sensor info
-	if ((status = is_GetSensorInfo(cameraHandle, &sensorInfo)) != IS_SUCCESS) {
+	if ((status = is_GetSensorInfo(camera_handle, &sensorInfo)) != IS_SUCCESS) {
         printf("Failed to receive camera sensor information.\n");
         exit(2);
 	} 
 
     // set various other camera parameters
-	set_camera_params(cameraHandle);
+	setCameraParams(camera_handle);
 
     // set display mode and then get it to verify
-	if ((status = is_SetColorMode(cameraHandle, IS_CM_SENSOR_RAW8)) != IS_SUCCESS) {
+	if ((status = is_SetColorMode(camera_handle, IS_CM_SENSOR_RAW8)) != IS_SUCCESS) {
         printf("Setting display mode failed.\n");
         exit(2);
 	}
-    currColorMode = is_SetColorMode(cameraHandle, IS_GET_COLOR_MODE);
+    curr_color_mode = is_SetColorMode(camera_handle, IS_GET_COLOR_MODE);
     printf("Camera model: %s\n", sensorInfo.strSensorName);
     printf("Sensor ID/type: %i\n", sensorInfo.SensorID);
-    printf("Sensor color mode (from is_GetSensorInfo and is_SetColorMode): %i / %i\n", sensorInfo.nColorMode, currColorMode);
+    printf("Sensor color mode (from is_GetSensorInfo and is_SetColorMode): %i / %i\n", sensorInfo.nColorMode, curr_color_mode);
     printf("Maximum image width and height: %i, %i\n", sensorInfo.nMaxWidth, sensorInfo.nMaxHeight);
     printf("Pixel size (micrometers): %.2f\n", ((double) sensorInfo.wPixelSize)/100.0);
  	
     // allocate camera memory
-	int colourDepth = 8; 
-	if ((status = is_AllocImageMem(cameraHandle, sensorInfo.nMaxWidth, sensorInfo.nMaxHeight, colourDepth, &memoryStartingPointer, &memoryId)) != IS_SUCCESS) {
+	color_depth = 8; 
+	if ((status = is_AllocImageMem(camera_handle, sensorInfo.nMaxWidth, sensorInfo.nMaxHeight, color_depth, &mem_starting_ptr, &mem_id)) != IS_SUCCESS) {
 		printf("Allocating camera memory failed.\n");
         exit(2);
 	}
 
     // set memory for image (make memory pointer active)
-	if ((status = is_SetImageMem(cameraHandle, memoryStartingPointer, memoryId)) != IS_SUCCESS) {
+	if ((status = is_SetImageMem(camera_handle, mem_starting_ptr, mem_id)) != IS_SUCCESS) {
         printf("Setting memory to active failed.\n");
         exit(2);
     }
 
     // get image memory
-	void * activeMemoryLocation;
-	if ((status = is_GetImageMem(cameraHandle, &activeMemoryLocation)) != IS_SUCCESS) {
+	if ((status = is_GetImageMem(camera_handle, &active_mem_loc)) != IS_SUCCESS) {
         printf("Getting image memory failed.\n");
         exit(2);
     }
 
     // how clear images can be is affected by pixelclock and fps 
-    int pixelclock = 30;
-	if ((status = is_PixelClock(cameraHandle, IS_PIXELCLOCK_CMD_SET, (void *) &pixelclock, sizeof(pixelclock))) != IS_SUCCESS) {
+    pixelclock = 30;
+	if ((status = is_PixelClock(camera_handle, IS_PIXELCLOCK_CMD_SET, (void *) &pixelclock, sizeof(pixelclock))) != IS_SUCCESS) {
         printf("Pixel clock failed to set\n");
         exit(2);
     }
     // get current pixel clock to check
-    is_PixelClock(cameraHandle, IS_PIXELCLOCK_CMD_GET, (void *) &currPixelClock, sizeof(currPixelClock));
-    printf("Pixel clock: %i\n", currPixelClock);
+    is_PixelClock(camera_handle, IS_PIXELCLOCK_CMD_GET, (void *) &curr_pc, sizeof(curr_pc));
+    printf("Pixel clock: %i\n", curr_pc);
 
     // set frame rate
-	double newFPS = 10;
-	if ((status = is_SetFrameRate(cameraHandle, IS_GET_FRAMERATE, (void *) &newFPS)) != IS_SUCCESS) {
+	fps = 10;
+	if ((status = is_SetFrameRate(camera_handle, IS_GET_FRAMERATE, (void *) &fps)) != IS_SUCCESS) {
         printf("Frame rate failed to set.\n");
         exit(2);
     }
 
     // set trigger to software mode (call is_FreezeVideo to take a single picture in single frame mode)
-	if ((status = is_SetExternalTrigger(cameraHandle, IS_SET_TRIGGER_SOFTWARE)) != IS_SUCCESS) {
+	if ((status = is_SetExternalTrigger(camera_handle, IS_SET_TRIGGER_SOFTWARE)) != IS_SUCCESS) {
         printf("Trigger failed to set to desired mode.\n");
         exit(2);
 	}
     // get the current trigger setting
-    currExtTrig = is_SetExternalTrigger(cameraHandle, IS_GET_EXTERNALTRIGGER);
-    printf("Current external trigger mode: %i\n", currExtTrig);
+    curr_ext_trig = is_SetExternalTrigger(camera_handle, IS_GET_EXTERNALTRIGGER);
+    printf("Current external trigger mode: %i\n", curr_ext_trig);
 
     // confirmation message that camera is initialized
     printf("Done initializing camera.\n");
-    printf("----------------------------\n\n");
+    printf("----------------------------\n");
 }
 
-// parameters for saving images taken by the camera
-int saveImage() {
+// establish the parameters for saving images taken by the camera
+int setSaveImage() {
     ImageFileParams.pwchFileName = L"save1.bmp";
     ImageFileParams.pnImageID = NULL;
     ImageFileParams.ppcImageMem = NULL;
@@ -386,9 +393,10 @@ int saveImage() {
     ImageFileParams.nFileType = IS_IMG_BMP;
 }
 
+// mask hot pixels accordinging to static and dynamic maps
 void makeMask(char * ib, int i0, int j0, int i1, int j1, int x0, int y0, bool subframe) {
     static int first_time = 1;
-    // Declare static hot pixel coordinates
+    // declare static hot pixel coordinates
     static int * x_p = NULL;
     static int * y_p = NULL;
     // number of pixels stored
@@ -409,6 +417,7 @@ void makeMask(char * ib, int i0, int j0, int i1, int j1, int x0, int y0, bool su
         FILE * f = fopen(STATIC_HP_MASK, "r");
         int i, j;
         num_p = 0;
+
         if (f) {
             printf("******************************* Loading static hot pixel map... *******************************\n");
             char * line = NULL;
@@ -436,6 +445,7 @@ void makeMask(char * ib, int i0, int j0, int i1, int j1, int x0, int y0, bool su
             fflush(f);
             fclose(f);
         }
+
         // do not want to recreate hp mask automatically, so set field to 0
         all_blob_params.make_static_hp_mask = 0;
         // no longer the first time we are running
@@ -453,7 +463,7 @@ void makeMask(char * ib, int i0, int j0, int i1, int j1, int x0, int y0, bool su
     }
 
     for (j = j0; j < j1; j++) {
-        mask[i0 + j*CAMERA_WIDTH] = mask[i1-1 + j*CAMERA_WIDTH] = 0;
+        mask[i0 + j*CAMERA_WIDTH] = mask[i1 - 1 + j*CAMERA_WIDTH] = 0;
     }
 
     i0++;
@@ -463,6 +473,7 @@ void makeMask(char * ib, int i0, int j0, int i1, int j1, int x0, int y0, bool su
   
     if (all_blob_params.dynamic_hot_pixels) {
         int nhp = 0;
+
         for (j = j0; j < j1; j++) {
             for (i = i0; i < i1; i++) {
                 p0 = 100*ib[i + j*CAMERA_WIDTH]/cutoff;
@@ -499,6 +510,7 @@ void makeMask(char * ib, int i0, int j0, int i1, int j1, int x0, int y0, bool su
     }
 }
 
+// process the image with a filter
 void boxcarFilterImage(char * ib, int i0, int j0, int i1, int j1, int r_f, double * filtered_image) {
     static int first_time = 1;
     static char * nc = NULL;
@@ -559,19 +571,18 @@ void boxcarFilterImage(char * ib, int i0, int j0, int i1, int j1, int r_f, doubl
     }
 }
 
-int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** starY, double ** starMag, char * output_buffer) { 
+int findBlobs(char * input_buffer, int w, int h, double ** star_x, double ** star_y, double ** star_mags, char * output_buffer) { 
     static int first_time = 1;
     static double * ic = NULL;
     static double * ic2 = NULL;
     static int num_blobs_alloc = 0;
 
-	// create timer
+	// create timer (ASK ABOUT THIS)
 	int msec = 0, trigger = 60000; // msec
 	clock_t before = clock();
  	clock_t difference = clock() - before;
 	msec = difference  * 1000/CLOCKS_PER_SEC;
  	int diff = trigger-msec;
-
     difference = clock() - before;
     msec = difference * 1000/CLOCKS_PER_SEC;
 
@@ -582,7 +593,7 @@ int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** star
         first_time = 0;
     }
   
-    // we use half-width internally, but the api gives us full width.
+    // we use half-width internally, but the API gives us full width.
     int x_size = w/2;
     int y_size = h/2;
 
@@ -600,6 +611,7 @@ int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** star
         printf("******************************* Making static hot pixel map... *******************************\n");
         // make a file and write bright pixel coordinates to it
         FILE * f = fopen(STATIC_HP_MASK, "w"); 
+
         for (int yp = 0; yp < CAMERA_HEIGHT; yp++) {
             for (int xp = 0; xp < CAMERA_WIDTH; xp++) {
                 // index in the array where we are
@@ -629,6 +641,7 @@ int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** star
 
     if (all_blob_params.high_pass_filter) {       // only high-pass filter full frames
         b += all_blob_params.r_high_pass_filter;
+
         boxcarFilterImage(input_buffer, i0, j0, i1, j1, all_blob_params.r_high_pass_filter, ic2);
 
         for (int j = j0+b; j < j1-b; j++) {
@@ -660,20 +673,24 @@ int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** star
     // fill output buffer if the variable is defined 
     if (output_buffer) {
         int pixel_offset = 0;
+
         if (all_blob_params.high_pass_filter) pixel_offset = 50;
 
         if (all_blob_params.filter_return_image) {
             printf("Filtering returned image...\n");
+
             for (int j = j0 + 1; j < j1 - 1; j++) {
                 for (int i = i0 + 1; i < i1 - 1; i++) {
                   output_buffer[i + j*w] = ic[i + j*w]+pixel_offset;
                 }
             }
+
             for (int j = 0; j < b; j++) {
                 for (int i = i0; i < i1; i++) {
                   output_buffer[i + (j + j0)*w] = output_buffer[i + (j1 - j - 1)*w] = mean + pixel_offset;
                 }
             }
+
             for (int j = j0; j < j1; j++) {
                 for (int i = 0; i < b; i++) {
                   output_buffer[i + i0 + j*w] = output_buffer[i1 - i - 1 + j*w] = mean + pixel_offset;
@@ -693,8 +710,9 @@ int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** star
     // find the blobs 
     double ic0;
     int blob_count = 0;
-    for (int j = j0+b; j < j1-b-1; j++) {
-        for (int i = i0+b; i < i1-b-1; i++) {
+    for (int j = j0 + b; j < j1-b-1; j++) {
+        for (int i = i0 + b; i < i1-b-1; i++) {
+            // ASK ABOUT THIS
         	difference = clock() - before;
             msec = difference  * 1000/ CLOCKS_PER_SEC;		      
             diff = trigger - msec;
@@ -723,34 +741,34 @@ int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** star
                     // realloc array if necessary (when the camera looks at a really bright image, this slows everything down severely)
                     if (blob_count >= num_blobs_alloc) {
                         num_blobs_alloc += 500;
-                        *starX = realloc(*starX, sizeof(double)*num_blobs_alloc);
-                        *starY = realloc(*starY, sizeof(double)*num_blobs_alloc);
-                        *starMag = realloc(*starMag, sizeof(double)*num_blobs_alloc);
+                        *star_x = realloc(*star_x, sizeof(double)*num_blobs_alloc);
+                        *star_y = realloc(*star_y, sizeof(double)*num_blobs_alloc);
+                        *star_mags = realloc(*star_mags, sizeof(double)*num_blobs_alloc);
                      }
 
-                    (*starX)[blob_count] = i;
-                    (*starY)[blob_count] = j;
-                    (*starMag)[blob_count] = 100*ic[i + j*CAMERA_WIDTH];
+                    (*star_x)[blob_count] = i;
+                    (*star_y)[blob_count] = j;
+                    (*star_mags)[blob_count] = 100*ic[i + j*CAMERA_WIDTH];
 
                     // FIXME: not sure why this is necessary..
-                    if ((*starMag)[blob_count] < 0) {
-                        (*starMag)[blob_count] = UINT32_MAX;
+                    if ((*star_mags)[blob_count] < 0) {
+                        (*star_mags)[blob_count] = UINT32_MAX;
                     }
 
                     // If we already found a blob within SPACING and this one is bigger, replace it.
                     int spacing = all_blob_params.unique_star_spacing;
-                    if ((*starMag)[blob_count] > 25400) {
+                    if ((*star_mags)[blob_count] > 25400) {
                         spacing = spacing * 4;
                     }
                     for (int ib = 0; ib < blob_count; ib++) {
-                        if ((abs((*starX)[blob_count]-(*starX)[ib]) < spacing) &&
-                            (abs((*starY)[blob_count]-(*starY)[ib]) < spacing)) {
+                        if ((abs((*star_x)[blob_count]-(*star_x)[ib]) < spacing) &&
+                            (abs((*star_y)[blob_count]-(*star_y)[ib]) < spacing)) {
                             unique = 0;
                             // keep the brighter one
-                            if ((*starMag)[blob_count] > (*starMag)[ib]) {
-                                (*starX)[ib] = (*starX)[blob_count];
-                                (*starY)[ib] = (*starY)[blob_count];
-                                (*starMag)[ib] = (*starMag)[blob_count];
+                            if ((*star_mags)[blob_count] > (*star_mags)[ib]) {
+                                (*star_x)[ib] = (*star_x)[blob_count];
+                                (*star_y)[ib] = (*star_y)[blob_count];
+                                (*star_mags)[ib] = (*star_mags)[blob_count];
                             }
                         }
                     }
@@ -764,11 +782,11 @@ int get_blobs(char * input_buffer, int w, int h, double ** starX, double ** star
     }
     // this loop flips the vertical position of the blobs back to their normal location
     for (int ibb = 0; ibb < blob_count; ibb++) {
-        (*starY)[ibb] = CAMERA_HEIGHT - (*starY)[ibb];
+        (*star_y)[ibb] = CAMERA_HEIGHT - (*star_y)[ibb];
     }
 
     // merge sort
-    part(*starMag, 0, blob_count-1, *starX, *starY); 
+    part(*star_mags, 0, blob_count-1, *star_x, *star_y); 
     printf("Number of blobs found in image: %i\n", blob_count);
     return blob_count;
 }
@@ -824,13 +842,17 @@ void part(double * A, int p, int r, double * X, double * Y) {
 int loadDummyPicture(wchar_t * filename, char ** buffer) {
     ImageFileParams.ppcImageMem = buffer;
     ImageFileParams.pwchFileName = filename;
-    status = is_ImageFile(cameraHandle, IS_IMAGE_FILE_CMD_LOAD, (void*) &ImageFileParams, sizeof(ImageFileParams));
     ImageFileParams.ppcImageMem = NULL;
-    return 1;
+    if (is_ImageFile(camera_handle, IS_IMAGE_FILE_CMD_LOAD, (void*) &ImageFileParams, sizeof(ImageFileParams)) != IS_SUCCESS) {
+        return 0;
+    } else {
+        return 1;
+    }
+    ImageFileParams.ppcImageMem = NULL;
 }
 
 // make a table of stars (mostly used for testing)
-int makeTable(char * filename, char * blobfile, char * buffer, double * starMag, double * starX, double * starY, int blob_count) {
+int makeTable(char * filename, char * buffer, double * star_mags, double * star_x, double * star_y, int blob_count) {
     FILE * fp = NULL;
 
     if (!(fp = fopen(filename, "w"))) {
@@ -838,36 +860,22 @@ int makeTable(char * filename, char * blobfile, char * buffer, double * starMag,
         return 0;
     }
 
-    fptr = fopen(blobfile, "a");
-    fprintf(fptr, "------------------------------------------\n");
-    if (all_blob_params.use_static_hp_mask) {
-        fprintf(fptr, "Using static hot pixel map.\n");
-    } else {
-        fprintf(fptr, "Not using static hot pixel map.\n");
-    }
     for (int i = 0; i < blob_count; i++) {
-        fprintf(fp, "%f,%f,%f\n", starMag[i], starX[i], starY[i]);
-        // write the specific blob pixel coordinates to a separate data file 
-        fprintf(fptr, "[%i, %i]\n", (int) starX[i], (int) starY[i]);
+        fprintf(fp, "%f,%f,%f\n", star_mags[i], star_x[i], star_y[i]);
     }
 
     // close both files and return
     fclose(fp);
-    fclose(fptr);
     return 1;
 }
 
 void doCameraAndAstrometry() {
-    // static int ind = 1;
-    // for testing purposes (below)
-    int stop = 1; 
-    // starX, starY, and starMag get allocated and set in get_blobs()
-    static double * starX = NULL, * starY = NULL, * starMag = NULL;
+    // star_x, star_y, and star_mags get allocated and set in findBlobs() below
+    static double * star_x = NULL, * star_y = NULL, * star_mags = NULL;
     static char * output_buffer = NULL;
     static int first_time = 1;
     // for writing to data txt file
     char datafile[100];
-    char blobfile[100];
     // for formatting date in filename
     char date[256];
     char buff[100];
@@ -878,33 +886,33 @@ void doCameraAndAstrometry() {
     struct timespec camera_tp_beginning, camera_tp_end; 
 
     // uncomment line below for testing the values of each field in the global structure for blob_params
+
     verifyBlobParams();
- 
+
     if (first_time) {
         output_buffer = calloc(1, CAMERA_WIDTH*CAMERA_HEIGHT);
     }
 
-    // set up time
+    // set up time if reading in previous observing data
+    // static int ind = 1;
     // c_time = c_time_arr[ind];
-    // currDEC = DEC_arr[ind];
-    // currRA = RA_arr[ind];
-    // curr_dut1 = DUT1_arr[ind];
-    curr_dut1 = -0.23;
+    // currDEC = dec_arr[ind];
+    // curr_ra = ra_arr[ind];
     // ind++;
-
     // printf("\n");
     // printf("Current index: %i\n", ind);
-    // printf("Current c time: %i, current RA %f, current DEC %f, current dut1 %.15f\n", c_time, currRA, currDEC, curr_dut1);
+    // printf("Current c time: %i, current RA %f, current DEC %f, current dut1 %.15f\n", c_time, curr_ra, curr_dec, dut1);
     // printf("\n");
-
     // time_t seconds = c_time;
+
+    // set up time if taking new data
     time_t seconds = time(NULL);
     struct tm * tm_info;
     tm_info = gmtime(&seconds);
     all_astro_params.rawtime = seconds;
     // determine if it is a leap year
     leap_year = isLeapYear(tm_info->tm_year);
-    // if it is a leap year, adjust tm_info accordingly before it is passed to calculations in lost_in_space
+    // if it is a leap year, adjust tm_info accordingly before it is passed to calculations in lostInSpace
     if (leap_year) {
         if (tm_info->tm_yday == 59) {        // if we are on Feb 29th
             tm_info->tm_yday++;              // there are 366, not 365, days in a leap year
@@ -916,145 +924,163 @@ void doCameraAndAstrometry() {
         }
     }
 
-    // captures an image 
-    // printf("Taking a new image...\n");
-    // status = is_FreezeVideo(cameraHandle, IS_WAIT);
-    // get current time right after exposure
-    if (clock_gettime(CLOCK_REALTIME, &camera_tp_beginning) == -1) {
-        printf("Error occurred when calling clock_gettime(), error # %d\n", errno);
-    }
-    // if (status == -1) {
-    //   printf("Failed to capture image.");
-    //   exit(2);
-    // }
-
-    // name image file with time
-    // strftime(date, sizeof(date), "/home/xscblast/Desktop/blastcam/BMPs/saved_image_%Y-%m-%d_%H:%M:%S.bmp", tm_info);
-    // swprintf(filename, 200, L"%s", date);
-
-    // get the image from memory
-    status = is_GetActSeqBuf(cameraHandle, &bufferNumber, &waitingMem, &memory);
-
-    // testing pictures that have already been taken 
-    // loadDummyPicture(L"/home/xscblast/Desktop/blastcam/BMPs/saved_image_2019-07-01-23-34-22.bmp", &memory); 
-    // loadDummyPicture(L"/home/xscblast/Desktop/blastcam/BMPs/static_hot_pixel_test_2020-03-27_21:49:07.bmp", &memory);
-    loadDummyPicture(L"/home/xscblast/Desktop/blastcam/BMPs/saved_image_2020-04-22_02:00:59.bmp", &memory);
-    // loadDummyPicture(L"/home/xscblast/Desktop/blastcam/BMPs/saved_image_2020-03-08_05:54:58.bmp", &memory);
-
-    // find the blobs in the image
-    int blob_count = get_blobs(memory, CAMERA_WIDTH, CAMERA_HEIGHT, &starX, &starY, &starMag, output_buffer);
-    // kst displays the filtered image 
-    memcpy(memory, output_buffer, CAMERA_WIDTH*CAMERA_HEIGHT); 
-    // pointer for transmitting to user should point to where image is in memory
-    camera_raw = output_buffer;
-
-    // save image
-    ImageFileParams.pwchFileName = filename;
-    status = is_ImageFile(cameraHandle, IS_IMAGE_FILE_CMD_SAVE, (void *) &ImageFileParams, sizeof(ImageFileParams));
-    if (status == -1) {
-        char * lastErrorString;
-        int lastError = 0;
-        is_GetError(cameraHandle, &lastError, &lastErrorString);
-        printf("Failed to save image, error string: %s\n", lastErrorString);
-        exit(2);
-    }
-
-    wprintf(L"Saving to \"%s\"\n", filename);
-    // unlink whatever the latest saved image was linked to before
-    unlink("/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
-    // symbolically link current date to latest image for kst to pull from for live updates
-    symlink(date, "/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
-
-    // data file for writing to pass to makeTable and lost_in_space
-    strftime(datafile, sizeof(datafile), "/home/xscblast/Desktop/blastcam/data_%b-%d.txt", tm_info); 
-    // write number of blobs to observing data file
-    fptr = fopen(datafile, "a");
-
-    // if this is the first round of solving, write some preliminary information to the observing file
-    if (first_time) {
-        // get frame rate again
-        is_SetFrameRate(cameraHandle, IS_GET_FRAMERATE, (void *) &actualFPS);
-
-        // write observing information to data file
-        strftime(buff, sizeof(buff), "%B %d Observing Session - beginning %H:%M:%S GMT", tm_info); 
-        fprintf(fptr, "************************ %s ************************\n", buff);
-        fprintf(fptr, "Camera model: %s\n", sensorInfo.strSensorName);
-        fprintf(fptr, "----------------------------------------------------\n");
-        fprintf(fptr, "Exposure: %f milliseconds\n", currentExposure);
-        fprintf(fptr, "Pixel clock: %i\n", currPixelClock);
-        fprintf(fptr, "Frame rate achieved (desired is 10): %f\n", actualFPS);
-        fprintf(fptr, "Trigger delay (microseconds): %i\n", currTrigDelay);
-        fprintf(fptr, "Current trigger mode setting: %i\n", currExtTrig);
-        fprintf(fptr, "Current trigger timeout: %i\n", currTimeout);
-        fprintf(fptr, "Auto shutter (should be disabled): %.1f\n", currShutter);
-        fprintf(fptr, "Auto frame rate (should be disabled): %.1f\n", actualAutoFR);
-        fprintf(fptr, "----------------------------------------------------\n");
-        fprintf(fptr, "Sensor ID/type: %hu\n", sensorInfo.SensorID);
-        fprintf(fptr, "Sensor color mode (from is_GetSensorInfo and is_SetColorMode): %i | %i\n", sensorInfo.nColorMode, currColorMode);
-        fprintf(fptr, "Maximum image width and height: %i, %i\n", sensorInfo.nMaxWidth, sensorInfo.nMaxHeight);
-        fprintf(fptr, "Pixel size (micrometers): %.2f\n", ((double) sensorInfo.wPixelSize)/100.0);
-        fprintf(fptr, "Gain settings: %i for master gain, %i for red gain, %i for green gain, and %i for blue gain.\n", 
-                       currMasterGain, currRedGain, currGreenGain, currBlueGain);
-        fprintf(fptr, "Auto gain (should be disabled): %i\n", (int) currAutoGain);
-        fprintf(fptr, "Gain boost (should be disabled): %i\n", currGainBoost);
-        fprintf(fptr, "Hardware gamma (should be disabled): %i\n", currGamma);
-        fprintf(fptr, "----------------------------------------------------\n");
-        fprintf(fptr, "Auto black level (should be off): %i\n", actualBLMode);
-        fprintf(fptr, "Black level offset (desired is 50): %i\n", actualBLOffset);
-
-        // write header to data file
-        fprintf(fptr, "\nC time|GMT|Blob #|RA (deg)|DEC (deg)|FR (deg)|PS|ALT (deg)|AZ (deg)|IR (deg)|Astrom. solve time (msec)|Camera time (msec)");
-    
-        // reset buffer for later writing
-        memset(buff, 0, sizeof(buff));
-
-        // no longer first time code is running (all first time tasks are completed)
-        first_time = 0;
-    }
-
-    // write blob and time information to data file
-    strftime(buff, sizeof(buff), "%b %d %H:%M:%S", tm_info); 
-    printf("Time going into lost_in_space_astrometry: %s\n", buff);
-    fprintf(fptr, "\r%li|%s|", seconds, buff);
-    fclose(fptr);
-
-    // make a table of the blobs for kst2
-    strftime(blobfile, sizeof(blobfile), "/home/xscblast/Desktop/blastcam/blobs_%b-%d.txt", tm_info); 
-    makeTable("makeTable.txt", blobfile, memory, starMag, starX, starY, blob_count);    
-
-    // solve astrometry
-    printf("Trying to solve astrometry...\n");
-    status = lost_in_space_astrometry(starX, starY, starMag, blob_count, tm_info, datafile);
-    // get current time right after solving
-    if (clock_gettime(CLOCK_REALTIME, &camera_tp_end) == -1) {
-        printf("Error occurred when calling clock_gettime(), error # %d\n", errno);
-    }
-
-    // calculate time it took camera program to run
-    long camera_sec = camera_tp_end.tv_sec - camera_tp_beginning.tv_sec;
-    long camera_nanosec = camera_tp_end.tv_nsec - camera_tp_beginning.tv_nsec;
-    // handle clock underflow
-    if (camera_tp_beginning.tv_nsec > camera_tp_end.tv_nsec) {
-        --camera_sec;
-        camera_nanosec += 1000000000;
-    }
-    double camera_time = (double) camera_sec + ((double) camera_nanosec/ (double) 1000000000);
-    printf("Camera program took %f seconds to solve.\n", camera_time);
-    fptr = fopen(datafile, "a");
-    fprintf(fptr, "|%f", camera_time*1000.0);
-    fclose(fptr);
-
-    if (status) {
-        // change to 0 to make loop stop on solve (for testing a single solution)
-        stop = 1;
-        // if (ind == 2459) {
-        //     printf("At end of April 12 data, finishing...\n");
-        //     clean_up();
-        // }
+    // if auto-focusing flag is on, enter auto-focusing mode
+    if (all_camera_params.focus_mode) {
+        // check the auto-focusing parameters
+        printf("\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Now in auto-focusing mode in doCameraAndAstrometry(). ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
+        // perform auto-focusing function from lens_adapter.c
+        if (autofocus(tm_info) < 1) {
+            printf("Error during auto-focusing process.\n");
+        } else {
+            printf("Successfully auto-focused.\n");
+        }
+        // set auto-focusing flag to 0 so the process is not accidentally repeated (unless the user specifies so)
+        all_camera_params.focus_mode = 0;
     } else {
-        printf("Could not solve astrometry.\n");
-    }
+        printf("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ No longer auto-focusing. Proceeding to take observing images... ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
+        
+        // capture an image 
+        // printf("Taking a new image...\n");
+        // if (is_FreezeVideo(camera_handle, IS_WAIT) != IS_SUCCESS) {
+        //     printf("Failed to capture new image.");
+        //     exit(2);
+        // } else {
+        // get current time right after exposure
+        if (clock_gettime(CLOCK_REALTIME, &camera_tp_beginning) == -1) {
+            printf("Error occurred when calling clock_gettime(), error # %d\n", errno);
+        }
+        // }
 
-    memset(filename, 0, sizeof(filename));
-    memset(buff, 0, sizeof(buff));
+        // name new image file with time
+        // strftime(date, sizeof(date), "/home/xscblast/Desktop/blastcam/BMPs/saved_image_%Y-%m-%d_%H:%M:%S.bmp", tm_info);
+        // swprintf(filename, 200, L"%s", date);
+
+        // get the image from memory
+        if (is_GetActSeqBuf(camera_handle, &buffer_num, &waiting_mem, &memory) != IS_SUCCESS) {
+            printf("Error retrieving the active image memory.\n");
+        }
+
+        // testing pictures that have already been taken 
+        if (loadDummyPicture(L"/home/xscblast/Desktop/blastcam/BMPs/saved_image_2020-04-22_02:00:59.bmp", &memory) == 1) {
+            printf("Successfully loaded test picture.\n");
+        } else {
+            printf("Error loading test picture.\n");
+        }
+
+        // find the blobs in the image
+        int blob_count = findBlobs(memory, CAMERA_WIDTH, CAMERA_HEIGHT, &star_x, &star_y, &star_mags, output_buffer);
+
+        // make kst display the filtered image 
+        memcpy(memory, output_buffer, CAMERA_WIDTH*CAMERA_HEIGHT); 
+
+        // pointer for transmitting to user should point to where image is in memory
+        camera_raw = output_buffer;
+
+    	// save image
+    	ImageFileParams.pwchFileName = filename;
+    	status = is_ImageFile(camera_handle, IS_IMAGE_FILE_CMD_SAVE, (void *) &ImageFileParams, sizeof(ImageFileParams));
+    	if (status == -1) {
+            char * last_error_str;
+            int last_err = 0;
+
+            is_GetError(camera_handle, &last_err, &last_error_str);
+            printf("Failed to save image, error string: %s\n", last_error_str);
+            exit(2);
+    	}
+
+        wprintf(L"Saving to \"%s\"\n", filename);
+        // unlink whatever the latest saved image was linked to before
+        unlink("/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
+        // symbolically link current date to latest image for kst to pull from for live updates
+        symlink(date, "/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
+
+        // data file for writing to pass to lostInSpace
+        strftime(datafile, sizeof(datafile), "/home/xscblast/Desktop/blastcam/data_%b-%d.txt", tm_info); 
+        // write number of blobs to observing data file
+        fptr = fopen(datafile, "a");
+
+        // if this is the first round of solving, write some preliminary information to the observing file
+        if (first_time) {
+            // get frame rate again
+            is_SetFrameRate(camera_handle, IS_GET_FRAMERATE, (void *) &actual_fps);
+
+            // write observing information to data file
+            strftime(buff, sizeof(buff), "%B %d Observing Session - beginning %H:%M:%S GMT", tm_info); 
+            fprintf(fptr, "************************ %s ************************\n", buff);
+            fprintf(fptr, "Camera model: %s\n", sensorInfo.strSensorName);
+            fprintf(fptr, "----------------------------------------------------\n");
+            fprintf(fptr, "Exposure: %f milliseconds\n", curr_exposure);
+            fprintf(fptr, "Pixel clock: %i\n", curr_pc);
+            fprintf(fptr, "Frame rate achieved (desired is 10): %f\n", actual_fps);
+            fprintf(fptr, "Trigger delay (microseconds): %i\n", curr_trig_delay);
+            fprintf(fptr, "Current trigger mode setting: %i\n", curr_ext_trig);
+            fprintf(fptr, "Current trigger timeout: %i\n", curr_timeout);
+            fprintf(fptr, "Auto shutter (should be disabled): %.1f\n", curr_shutter);
+            fprintf(fptr, "Auto frame rate (should be disabled): %.1f\n", auto_fr);
+            fprintf(fptr, "----------------------------------------------------\n");
+            fprintf(fptr, "Sensor ID/type: %u\n", sensorInfo.SensorID);
+            fprintf(fptr, "Sensor color mode (from is_GetSensorInfo and is_SetColorMode): %i | %i\n", sensorInfo.nColorMode, curr_color_mode);
+            fprintf(fptr, "Maximum image width and height: %i, %i\n", sensorInfo.nMaxWidth, sensorInfo.nMaxHeight);
+            fprintf(fptr, "Pixel size (micrometers): %.2f\n", ((double) sensorInfo.wPixelSize)/100.0);
+            fprintf(fptr, "Gain settings: %i for master gain, %i for red gain, %i for green gain, and %i for blue gain.\n", 
+                           curr_master_gain, curr_red_gain, curr_green_gain, curr_blue_gain);
+            fprintf(fptr, "Auto gain (should be disabled): %i\n", (int) curr_ag);
+            fprintf(fptr, "Gain boost (should be disabled): %i\n", curr_gain_boost);
+            fprintf(fptr, "Hardware gamma (should be disabled): %i\n", curr_gamma);
+            fprintf(fptr, "----------------------------------------------------\n");
+            fprintf(fptr, "Auto black level (should be off): %i\n", bl_mode);
+            fprintf(fptr, "Black level offset (desired is 50): %i\n", bl_offset);
+
+            // write header to data file
+            if (fprintf(fptr, "\nC time|GMT|Blob #|RA (deg)|DEC (deg)|FR (deg)|PS|ALT (deg)|AZ (deg)|IR (deg)|Astrom. solve time (msec)|Camera time (msec)") < 0) {
+                printf("Unable to write header to observing file.\n");
+            }
+
+            // reset buffer for later writing
+            memset(buff, 0, sizeof(buff));
+
+            // no longer first time code is running (all first time tasks are completed)
+            first_time = 0;
+        }
+
+        // write blob and time information to data file
+        strftime(buff, sizeof(buff), "%b %d %H:%M:%S", tm_info); 
+        printf("Time going into lostInSpace: %s\n", buff);
+        if (fprintf(fptr, "\r%li|%s|", seconds, buff) < 0) {
+            printf("Unable to write time and blob count to data file.\n");
+        }
+        fclose(fptr);
+
+        // make a table of the blobs for kst2
+        if (makeTable("makeTable.txt", memory, star_mags, star_x, star_y, blob_count) != 1) {
+            printf("Error writing table of blobs for Kst.\n");
+        }   
+
+        // solve astrometry
+        printf("Trying to solve astrometry...\n");
+        if (lostInSpace(star_x, star_y, star_mags, blob_count, tm_info, datafile) != 1) {
+            printf("Could not solve Astrometry.\n");
+        }
+
+        // get current time right after solving
+        if (clock_gettime(CLOCK_REALTIME, &camera_tp_end) == -1) {
+            printf("Error occurred when calling clock_gettime(), error # %d\n", errno);
+        }
+
+        // calculate time it took camera program to run in nanoseconds
+	    double start = (double) (camera_tp_beginning.tv_sec*1e9) + (double) camera_tp_beginning.tv_nsec;
+	    double end = (double) (camera_tp_end.tv_sec*1e9) + (double) camera_tp_end.tv_nsec;
+        double camera_time = end - start;
+	    printf("Camera solved in %f msec.\n", camera_time*1e-6);
+
+        // write this time to the data file
+        fptr = fopen(datafile, "a");
+        if (fprintf(fptr, "|%f", camera_time*1e-6) < 0) {
+            printf("Unable to write how long camera program took to data file.\n");
+        }
+        fclose(fptr);
+
+        memset(filename, 0, sizeof(filename));
+        memset(buff, 0, sizeof(buff));
+    }
 }

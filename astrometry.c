@@ -23,22 +23,17 @@
 #include "lens_adapter.h"
 
 #define _USE_MATH_DEFINES
-// more precise longitude and latitude constants (deg)
-#define lat84   40.79243469238281
-#define long84 -73.68112182617188 // (west is -, east +)
-#define hm84    57.77
-
+/* Longitude and latitude constants (deg) */
 #define backyard_lat   40.79166879
 #define backyard_long -73.68133399
 #define backyard_hm    59.24
 
 engine_t * engine = NULL;
 solver_t * solver = NULL;
-
 FILE * fptr;
 
-// create instance of astrometry parameters global structure, accessible from commands.c as well
-struct astro_params all_astro_params = {
+/* Astrometry parameters global structure, accessible from commands.c as well */
+struct astrometry all_astro_params = {
 	.rawtime = 0,
 	.logodds = 1e8,
 	.latitude = backyard_lat,
@@ -53,38 +48,55 @@ struct astro_params all_astro_params = {
 	.az = 0,
 };
 
-// function to initialize astrometry
-void init_astrometry() {
+/* Function to initialize astrometry.
+** Input: None.
+** Output: Flag indicating successful initialization (or not) of Astrometry system
+*/
+int initAstrometry() {
 	engine = engine_new();
 	solver = solver_new();
 	if (engine_parse_config_file(engine, "/usr/local/astrometry/etc/astrometry.cfg")) {
 		printf("Bad configuration file in Astrometry constructor.\n");
+		return -1;
 	}
+	return 1;
 }
 
-// function to close astrometry
-void close_astrometry() {	
+/* Function to close astrometry.
+** Input: None.
+** Output: None (void).
+*/
+void closeAstrometry() {	
 	engine_free(engine);
 	solver_free(solver);
 }
 
-// function solving for pointing location on the sky
-int lost_in_space_astrometry(double * starX, double * starY, double * starMag, unsigned numBlobs, 
-                             struct tm * tm_info, char * datafile) {
+/* Function for solving for pointing location on the sky.
+** Input: pointers to the x coordinates of the stars (star_x), y coordinates of the stars (star_y), 
+** magnitudes of the stars (star_mags), the number of blobs, the timing structure, and the observing file 
+** name.
+** Output: the status of finding a solution or not (sol_status).
+*/
+int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned num_blobs, struct tm * tm_info, char * datafile) {
+	// timers for astrometry
+	struct timespec astrom_tp_beginning, astrom_tp_end; 
+	// telemetry variables
 	double ra, dec, fr, ps, ir;
-
-	// for printing
-	char timebuff[100];
-
-	// for timing how long astrometry takes to solve 
-    struct timespec astrom_tp_beginning, astrom_tp_end; 
+	// integer value for returning based on achieving a solution or not 
+	int sol_status;
+	// for apportioning Julian dates
+	double d1, d2;
+	// for printing the time for checking
+	char time_display[100];
+	// for AltAz SOFA function ('ob' means observed)
+	double aob, zob, hob, dob, rob, eo;
 
 	// set up solver configuration
 	solver->funits_lower = MIN_PS;
 	solver->funits_upper = MAX_PS;
 	
-	// set max number of sources?
-	solver->endobj = numBlobs;
+	// set max number of sources
+	solver->endobj = num_blobs;
 
 	// disallow tiny quads
 	solver->quadsize_min = 0.1*MIN(CAMERA_WIDTH - 2*CAMERA_MARGIN, CAMERA_HEIGHT - 2*CAMERA_MARGIN);
@@ -103,18 +115,17 @@ int lost_in_space_astrometry(double * starX, double * starY, double * starMag, u
 	// figure out the index file range to search in
 	double hprange = arcsec2dist(MAX_PS*hypot(CAMERA_WIDTH - 2*CAMERA_MARGIN, CAMERA_HEIGHT - 2*CAMERA_MARGIN)/2.0);
 
-
 	// make list of stars
-	starxy_t * field = starxy_new(numBlobs, 1, 0);
-	// start timer
+	starxy_t * field = starxy_new(num_blobs, 1, 0);
+
+	// start timer for astrometry 
 	if (clock_gettime(CLOCK_REALTIME, &astrom_tp_beginning) == -1) {
         printf("Error occurred when calling clock_gettime(), error # %d\n", errno);
     }
 
-	starxy_set_x_array(field, starX);
-	starxy_set_y_array(field, starY);
-	starxy_set_flux_array(field, starMag);
-
+	starxy_set_x_array(field, star_x);
+	starxy_set_y_array(field, star_y);
+	starxy_set_flux_array(field, star_mags);
 	starxy_sort_by_flux(field);
 
 	solver_set_field(solver, field);
@@ -124,66 +135,53 @@ int lost_in_space_astrometry(double * starX, double * starY, double * starMag, u
 	for (int i = 0; i < (int) pl_size((*engine).indexes); i++) {
 		index_t * index = (index_t *) pl_get((*engine).indexes, i);
 
-		// check the Astrometry timeout
-		// if (i % 10 == 0) { 
-		// 	difference = clock() - before;
-  		// 	msec = difference * 1000/CLOCKS_PER_SEC;
-  		// 	diff = trigger - msec;
-		// 	if (diff < 0) {
-		// 		printf("Astrometry timed out.\n");
-		// 		return 0;
-		// 	}
-		// }
-
 		if (ra >= -180 && dec >= -90 && index_is_within_range(index, ra, dec, dist2deg(hprange))) {
 			solver_add_index(solver, index);
 		} else if (ra < -180 || dec < -90) {
 			solver_add_index(solver, index);
 		}
+
 		index_reload(index);
 	}
 
 	solver_log_params(solver);
 	solver_run(solver);
 
-	// comment out when NOT testing fixed time stamps!
-	// (*solver).best_match_solves = 1;
-
-	int ret = 0;
+	// solution status should be 0 since we have yet to achieve a solution (below) 
+	sol_status = 0;
 	if ((*solver).best_match_solves) {
 		double pscale;
 		tan_t * wcs;
 
+		// get World Coordinate System data (wcs)
 		wcs = &((*solver).best_match.wcstan);
 		tan_pixelxy2radec(wcs, (CAMERA_WIDTH - 2*CAMERA_MARGIN - 1)/2.0, (CAMERA_HEIGHT - 2*CAMERA_MARGIN - 1)/2.0, &ra, &dec);
+		
 		// calculate pixel scale and field rotation
 		ps = tan_pixel_scale(wcs);
 		fr = tan_get_orientation(wcs); 
-	
-		// for testing previous observing data
-		// ra = currRA;
-		// dec = currDEC;
 
-		// calculate altitude and azimuth using top-level SOFA function.
-		double d1, d2;
-		strftime(timebuff, sizeof(timebuff), "%b %d %H:%M:%S", tm_info); 
-		printf("Time going into iauDtf2d in lost_in_space_astrometry(): %s\n", timebuff);
-		int sofa_juldate_status = iauDtf2d("UTC", tm_info->tm_year + 1900, tm_info->tm_mon + 1, tm_info->tm_mday, tm_info->tm_hour, 
-	                                              tm_info->tm_min, (double) tm_info->tm_sec, &d1, &d2);	
-		if (sofa_juldate_status != 0) {
+		// calculate Julian date
+		strftime(time_display, sizeof(time_display), "%b %d %H:%M:%S", tm_info); 
+		printf("Time going into iauDtf2d in lostInSpace(): %s\n", time_display);
+		if (iauDtf2d("UTC", tm_info->tm_year + 1900, tm_info->tm_mon + 1, tm_info->tm_mday, tm_info->tm_hour, 
+	                        tm_info->tm_min, (double) tm_info->tm_sec, &d1, &d2) != 0) {
 			printf("Julian date not properly calculated.\n");
 		}
 
-		double aob, zob, hob, dob, rob, eo;
-		iauAtco13(ra*(M_PI/180.0), dec*(M_PI/180.0), 
-		          0.0, 0.0, 0.0, 0.0, 
-				  d1, d2 + (all_camera_params.exposure_time/(2000.0*3600.0*24.0)), curr_dut1, 
-				  all_astro_params.longitude*(M_PI/180.0), all_astro_params.latitude*(M_PI/180.0), all_astro_params.hm, 0.0, 0.0, 
-				  0.0, 0.0, 0.0, 0.0,
-				  &aob, &zob, &hob, &dob, &rob, &eo);
+		// calculate AltAz
+		if (iauAtco13(ra*(M_PI/180.0), dec*(M_PI/180.0), 
+		        	  0.0, 0.0, 0.0, 0.0, 
+				      d1, d2 + (all_camera_params.exposure_time/(2000.0*3600.0*24.0)), dut1, 
+				      all_astro_params.longitude*(M_PI/180.0), all_astro_params.latitude*(M_PI/180.0), 
+					  all_astro_params.hm, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+				      &aob, &zob, &hob, &dob, &rob, &eo) != 0) {
+			printf("Review preceding Julian date calculation; dubious year or unacceptable date passed to AltAz calculation.\n");
+		}
 
 		// calculate parallactic angle and add it to field rotation to get image rotation
-		double ir = (iauHd2pa(hob, dob, all_astro_params.latitude*(M_PI/180.0)))*(180.0/M_PI) + all_astro_params.fr;
+		ir = (iauHd2pa(hob, dob, all_astro_params.latitude*(M_PI/180.0)))*(180.0/M_PI) + fr;
+
 		// end timer
 		if (clock_gettime(CLOCK_REALTIME, &astrom_tp_end) == -1) {
         	printf("Error occurred when calling clock_gettime(), error # %d\n", errno);
@@ -199,32 +197,32 @@ int lost_in_space_astrometry(double * starX, double * starY, double * starMag, u
 		all_astro_params.ps = ps;
 
 		printf("\n****************************************** TELEMETRY ******************************************\n");
-		printf("Num blobs: %i | Obs. RA %lf | Obs. DEC %lf | FR %f | PS %lf | ALT %.15f | AZ %.15f | IR %lf\n", numBlobs,
+		printf("Num blobs: %i | Obs. RA %lf | Obs. DEC %lf | FR %f | PS %lf | ALT %.15f | AZ %.15f | IR %lf\n", num_blobs,
 		        all_astro_params.ra, all_astro_params.dec, all_astro_params.fr, all_astro_params.ps, all_astro_params.alt, 
 				all_astro_params.az, all_astro_params.ir);
 		printf("***********************************************************************************************\n\n");
 
-		// calculate how long solution took to solve
-		long astrom_sec = astrom_tp_end.tv_sec - astrom_tp_beginning.tv_sec;
-    	long astrom_nanosec = astrom_tp_end.tv_nsec - astrom_tp_beginning.tv_nsec;
-    	// handle clock underflow
-    	if (astrom_tp_beginning.tv_nsec > astrom_tp_end.tv_nsec) {
-    	    --astrom_sec;
-    	    astrom_nanosec += 1000000000;
-    	}
-    	double astrom_time = (double) astrom_sec + ((double) astrom_nanosec/ (double) 1000000000);
-		printf("Astrometry solved in %f msec.\n", astrom_time*1000.0);
+		// calculate how long solution took to solve in terms of nanoseconds
+		double start = (double) (astrom_tp_beginning.tv_sec*1e9) + (double) astrom_tp_beginning.tv_nsec;
+		double end = (double) (astrom_tp_end.tv_sec*1e9) + (double) astrom_tp_end.tv_nsec;
+    	double astrom_time = end - start;
+		printf("Astrometry solved in %f msec.\n", astrom_time*1e-6);
 
 		// write astrometry solution to data.txt file
 		printf("Writing Astrometry solution to data file...\n");
 		fptr = fopen(datafile, "a");
-		fprintf(fptr, "%i|%lf|%lf|%lf|%lf|%.15f|%.15f|%lf|%f", numBlobs,
-		        all_astro_params.ra, all_astro_params.dec, all_astro_params.fr, all_astro_params.ps, all_astro_params.alt, 
-				all_astro_params.az, all_astro_params.ir, astrom_time*1000.0);
+		if (fprintf(fptr, "%i|%lf|%lf|%lf|%lf|%.15f|%.15f|%lf|%f", num_blobs, all_astro_params.ra, all_astro_params.dec, 
+					all_astro_params.fr, all_astro_params.ps, all_astro_params.alt, all_astro_params.az, 
+					all_astro_params.ir, astrom_time*1e-6) < 0) {
+			printf("Error occurred writing Astrometry solution to observing file, error # %d\n", errno);
+		}
 		fclose(fptr);
-		ret = 1;
+
+		// we achieved a solution!
+		sol_status = 1;
 	} 
+	// clean everything up and return the status
 	solver_cleanup_field(solver);
 	solver_clear_indexes(solver);
-	return ret;
+	return sol_status;
 }
