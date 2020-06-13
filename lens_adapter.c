@@ -53,7 +53,6 @@
 ** 		we: write non-volatile parameters to EEPROM
 */
 
-// include necessary libraries
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,12 +63,12 @@
 #include <math.h>
 #include <time.h>
 
-// include our header files
 #include "lens_adapter.h"
 #include "camera.h"
 #include "commands.h"
+#include "matrix.h"
 
-/* Camera parameters global structure (defined in camera.h) */
+/* Camera parameters global structure (defined in lens_adapter.h) */
 struct camera_params all_camera_params = {
     .prev_focus_pos = 0,       // need to save previous focus value to determine by how much we need to move in mf command below
     .focus_position = 0,       // current focus position
@@ -85,23 +84,17 @@ struct camera_params all_camera_params = {
     .start_focus_pos = 0,      // starting focus position for auto-focusing search range is set to its default value below in initLensAdapter()
     .end_focus_pos = 0,        // ending focus position also set below
     .focus_step = 0,           // by default, check every fifth focus position
+    .photos_per_focus = 3,     // take 3 pictures per focus position by default
 };
 
-// variable for returning from Birger commands
 char * birger_output;
-// variable to check status after running lens adapter commands (error checking)
-int cmd_status;
-// variable for runCommand() function below
 char * buffer;
-// file for lens adapter
 int file_descriptor;
 // global variables for solution to quadratic regression for auto-focusing
 double a, b, c;
-// for processing the auto-focusing images
 int buffer_num;
 char * memory;
 char * waiting_mem;
-// for saving the auto-focusing images
 IMAGE_FILE_PARAMS ImageFileParams;
 
 /* Helper function to print a 1D array.
@@ -130,73 +123,6 @@ void printFluxFocus(int * flux_arr, int * focus_arr, int num_elements) {
     printf("\n");
 }
 
-/* Helper function to print matrices row-wise.
-** Input: The matrix to be printed to the terminal with its size (m rows x n columns).
-** Output: None (void). Prints the matrix to the terminal for verification.
-*/
-void printMatrix(int m, int n, double matrix[m][n]) {
-    for (int row = 0; row < m; row++) {
-        printf("[");
-        for (int col = 0; col < n; col++) {
-            printf("%25lf\t", matrix[row][col]);
-        }
-        printf("]\n");
-    }
-}
-
-/* Function to perform Gaussian elimination on the input augmented matrix and solve the 
-** system of equations for a, b, c (the elements of the input solution vector, x).
-** Input: the number of rows (m), the number of columns (n), the augmented matrix (m x n),
-** and a vector to hold the solution (x).
-** Output: None (void). Populates the solution vector. 
-*/
-int gaussianElimination(int m, int n, double A[m][n], double x[m]) {
-    // indices
-    int i, j, k;
-
-    for (i = 0; i < m - 1; i++) {
-        // perform partial pivoting
-        for (k = i + 1; k < m; k++) {
-            // if the absolute value of the diagonal element is smaller than any of the terms below it,
-            // interchange the rows
-            if (fabs(A[i][i]) < fabs(A[k][i])) {
-                for (j = 0; j < n; j++) {                
-                    double temp;
-                    temp = A[i][j];
-                    A[i][j] = A[k][j];
-                    A[k][j] = temp;
-                }
-            }
-        }
-
-        // if after partial pivoting the diagonal element is 0.0, the matrix can't be solved
-        if (A[i][i] == 0.0) {
-            printf("Mathematical error in matrix.\n");
-            return 0;
-        }
-
-        // begin Gaussian elimination
-        for (k = i + 1; k < m; k++) {
-            double multiplier = A[k][i]/A[i][i];
-            for (j = 0; j < n;j++){
-                A[k][j] = A[k][j] - multiplier*A[i][j];
-            }
-        }
-         
-    }
-
-    // begin back substitution
-    for (i = m - 1; i >= 0; i--) {
-        x[i] = A[i][n-1];
-        for (j = i + 1; j < n - 1; j++) {
-            x[i] = x[i] - A[i][j]*x[j];
-        }
-        x[i] = x[i]/A[i][i];
-    }   
-
-    return 1;        
-}
-
 /* Function to perform quadratic regressions during auto-focusing.
 ** Input: 1D arrays of flux and focus values, along with their length.
 ** Output: A flag indicating a successful solution via Gaussian elimination. 
@@ -208,13 +134,13 @@ int quadRegression(int * flux_arr, int * focus_arr, int len) {
     printFluxFocus(flux_arr, focus_arr, len);
 
     // summation quantities
-    double sumfocus;
-    double sumflux;
-    double sumfocus2;
-    double sumfocus3;
-    double sumfocus4;
-    double sumfluxfocus;
-    double sumfocus2flux;
+    double sumfocus = 0.0;
+    double sumflux = 0.0;
+    double sumfocus2 = 0.0;
+    double sumfocus3 = 0.0;
+    double sumfocus4 = 0.0;
+    double sumfluxfocus = 0.0;
+    double sumfocus2flux = 0.0;
     // vertical vector to hold solution values (gaussianElimination will populate this)
     double solution[3];
 
@@ -239,16 +165,14 @@ int quadRegression(int * flux_arr, int * focus_arr, int len) {
     // perform Gaussian elimination on this matrix
     if (gaussianElimination(3, 4, augmatrix, solution) < 1) {
         printf("Unable to perform Gaussian elimination on the given matrix.\n");
-        return 0;
+        return -1;
     }
 
-    // print the reduced upper triangular matrix and the solution vector
     printf("\n The upper triangular matrix after Gaussian elimination:\n");
     printMatrix(3, 4, augmatrix);
     printf("\nThe solution vector:");
     printArray(solution, 3);
 
-    // set global variables for coefficients to these values
     a = solution[0];
     b = solution[1];
     c = solution[2];
@@ -264,23 +188,26 @@ int initLensAdapter(char * path) {
     struct termios options;
 
     // open file descriptor with given path
-    file_descriptor = open(path, O_RDWR | O_NOCTTY /*| O_NDELAY*/);
-    if (file_descriptor < 0) {
+    if ((file_descriptor = open(path, O_RDWR | O_NOCTTY)) < 0) {
+        fprintf(stderr, "Error opening file descriptor to input path: %s.\n", strerror(errno));
         return -1;
     }
 
     if (tcgetattr(file_descriptor, &options) < 0) {
-        printf("Uable to store parameters in termios structure options, error # %d\n", errno);
+        fprintf(stderr, "Error getting termios structure parameters: %s.\n", strerror(errno));
+        return -1;
     }
 
     // set input speed
     if (cfsetispeed(&options, B115200) < 0) {
-        printf("Unable to set input baud rate in termios structure options to desired speed, error # %d\n", errno);
+        fprintf(stderr, "Unable to set input baud rate in termios structure options to desired speed: %s.\n", strerror(errno));
+        return -1;
     }
 
     // set output speed
     if (cfsetospeed(&options, B115200) < 0) {
-        printf("Unable to set output baud rate in termios structure options to desired speed, errnor # %d\n", errno);
+        fprintf(stderr, "Unable to set output baud rate in termios structure options to desired speed: %s.\n", strerror(errno));
+        return -1;
     }                      
 
     // standard setting for DSP 1750
@@ -309,68 +236,68 @@ int initLensAdapter(char * path) {
     options.c_lflag &= ~ICANON;
     options.c_cc[VTIME] = 2;
     options.c_cc[VMIN] = 0;
-    // options.c_iflag |= IGNCR;
 
     // apply changes
     if (tcsetattr(file_descriptor, TCSANOW, &options) < 0) {
-        printf("Unable to apply changes to termios structure options, errnor # %d\n", errno);
+        fprintf(stderr, "Unable to apply changes to termios structure options: %s.\n", strerror(errno));
+        return -1;
     }
 
     // flush the buffer (in case of unclean shutdown)
     if (tcflush(file_descriptor, TCIOFLUSH) < 0) {
-        printf("Buffer fails to flush in add lens.\n");
+        fprintf(stderr, "Buffer failed to flush: %s.\n", strerror(errno));
+        return -1;
     }
 
     // allocate space for returning values after running Birger commands
     birger_output = malloc(100);
 
     // set focus to 80 below infinity (hard-coded value focus position determined by testing with iDS and uEye software)
-    cmd_status = runCommand("la\r", file_descriptor, birger_output);
-    if (cmd_status == -1) {
+    if (runCommand("la\r", file_descriptor, birger_output) == -1) {
         printf("Failed to learn current focus range.\n");
+        return -1;
     }
-    cmd_status = runCommand("mi\r", file_descriptor, birger_output);
-    if (cmd_status == -1) {
+    if (runCommand("mi\r", file_descriptor, birger_output) == -1) {
         printf("Failed to move focus position to infinity.\n");
+        return -1;
     }
-    cmd_status = runCommand("mf -80\r", file_descriptor, birger_output);
-    if (cmd_status == -1) {
+    if (runCommand("mf -80\r", file_descriptor, birger_output) == -1) {
         printf("Failed to move the focus to the desired default position.\n");
+        return -1;
     } else {
         printf("Focus moved to desired default position.\n");
     }
 
-    // print focus position
     printf("Focus at 80 counts below infinity:\n");
-    cmd_status = runCommand("fp\r", file_descriptor, birger_output);
-    if (cmd_status == -1) {
+    if (runCommand("fp\r", file_descriptor, birger_output) == -1) {
         printf("Failed to print the new focus position.\n");
+        return -1;
     } 
 
     // update auto-focusing values now that camera parameters struct is populated
     all_camera_params.start_focus_pos = all_camera_params.focus_position - 100;
-    all_camera_params.end_focus_pos = all_camera_params.max_focus_pos - 20;
+    all_camera_params.end_focus_pos = all_camera_params.max_focus_pos - 25;
     all_camera_params.focus_step = 10;
 
     // set aperture parameter to maximum
     all_camera_params.max_aperture = 1;
 
     // initialize the aperture motor
-    cmd_status = runCommand("in\r", file_descriptor, birger_output);
-    if (cmd_status == -1) {
+    if (runCommand("in\r", file_descriptor, birger_output) == -1) {
         printf("Failed to initialize the motor.\n");
+        return -1;
     }
 
     // run the aperture maximization (fully open) command
-    cmd_status = runCommand("mo\r", file_descriptor, birger_output);
-    if (cmd_status == -1) {
+    if (runCommand("mo\r", file_descriptor, birger_output) == -1) {
         printf("Setting the aperture to maximum fails.\n");
+        return -1;
     }
 
     // print aperture position
-    cmd_status = runCommand("pa\r", file_descriptor, birger_output);
-    if (cmd_status == -1) {
+    if (runCommand("pa\r", file_descriptor, birger_output) == -1) {
         printf("Failed to print the new aperture position.\n");
+        return -1;
     } 
 
     // free up birger_output variable
@@ -378,120 +305,136 @@ int initLensAdapter(char * path) {
     return file_descriptor;
 }
 
-/* Function to auto-focus the lens when the camera starts its run and whenever the user commands.
-** Input: None.
-** Output: Flag indicating successful completion of the auto-focusing process.
+/* Function to take x auto-focus images and find the brightest blob among them.
+** Input: Timing struct for naming the images.
+** Output: The raw pixel value of the brightest blob detected among the images.
 */
-int autofocus(struct tm * tm_info) {
-    // variables for changing focus position
-    char focus_str_cmd[10];
-    int focus_diff;
-    int num_focus_pos;
-    // auto-focusing file pointer
-    FILE * af_file;
-    // variable for blob brightness
-    int brightest_blob;
-    // for naming the focus pictures
+int focusImage(struct tm * tm_info) {
+    int max_flux;
+    int blob_mags[3];
     wchar_t image_name[200] = L"";
     char date[256];
-    // for reading the auto-focusing file after we've written to it
-    char * af_line;
-    size_t af_len;
-    int af_read;
-    int flux, focus;
-    int ind;
-    // pointers for the star coordinates/magnitudes and the output buffer (image)
+    int brightest_blob;
     static double * star_x = NULL, * star_y = NULL, * star_mags = NULL;
     static char * output_buffer = NULL;
 
+    for (int photo = 0; photo < all_camera_params.photos_per_focus; photo++) {
+        if (is_FreezeVideo(camera_handle, IS_WAIT) != IS_SUCCESS) {
+            printf("Error taking auto-focusing picture %d.\n", photo);
+            return -1;
+        }
+
+        // get the image from memory
+        if (is_GetActSeqBuf(camera_handle, &buffer_num, &waiting_mem, &memory) != IS_SUCCESS) {
+            printf("Error retrieving the active image memory.\n");
+            return -1;
+        }
+
+        // find the blobs in the image
+        int num_blobs = findBlobs(memory, CAMERA_WIDTH, CAMERA_HEIGHT, &star_x, &star_y, &star_mags, output_buffer);
+
+        // find the brightest blob per picture
+        for (int blob = 0; blob < num_blobs; blob++) {
+            if (star_mags[blob] > brightest_blob) {
+                brightest_blob = star_mags[blob];
+            }
+        }
+        blob_mags[photo] = brightest_blob;
+
+        // make kst display the filtered image 
+        memcpy(memory, output_buffer, CAMERA_WIDTH*CAMERA_HEIGHT);
+        // pointer for transmitting to user should point to where image is in memory
+        camera_raw = output_buffer;
+        // name picture accordingly and save
+        strftime(date, sizeof(date), "%Y-%m-%d_%H:%M:%S", tm_info);
+        swprintf(image_name, 200, L"/home/xscblast/Desktop/blastcam/BMPs/focus_%d_image%d_%s", all_camera_params.focus_position, photo, date);
+        ImageFileParams.pwchFileName = image_name;
+        if (is_ImageFile(camera_handle, IS_IMAGE_FILE_CMD_SAVE, (void *) &ImageFileParams, sizeof(ImageFileParams)) == -1) {
+            const char * last_error_str = printCameraError();
+            printf("Failed to save auto-focusing image: %s\n", last_error_str);
+            return -1;
+        }
+    }
+
+    // find the brightest of the three brightest blobs and write it to text file with its corresponding focus
+    for (int i = 0; i < 3; i++) {
+        if (blob_mags[i] > max_flux) {
+            max_flux = blob_mags[i];
+        }
+    }
+
+    return max_flux;
+}
+
+/* Function to auto-focus the lens when the camera starts its run and whenever the user commands.
+** Input: The timing struct for naming the auto-focusing files (passed to focusImages()).
+** Output: The focus position corresponding to maximum flux.
+*/
+int autofocus(struct tm * tm_info) {
+    char focus_str_cmd[10];
+    int focus_diff;
+    int num_focus_pos = 0;
+    int focus_step = all_camera_params.focus_step;
+    FILE * af_file;
+    char * af_line = NULL;
+    size_t af_len = 0;
+    int af_read;
+    int flux = 0;
+    int focus = 0;
+    int ind = 0;
+
     // get to beginning of auto-focusing range
-    sprintf(focus_str_cmd, "mf %i\r", all_camera_params.start_focus_pos);
-    cmd_status = runCommand(focus_str_cmd, file_descriptor, birger_output);
-    if (cmd_status == -1) {
+    printf("Auto-focusing parameters: start = %d, stop = %d, step = %d.\n", all_camera_params.start_focus_pos, 
+                                                                            all_camera_params.end_focus_pos,
+                                                                            all_camera_params.focus_step);
+    sprintf(focus_str_cmd, "mf %i\r", all_camera_params.start_focus_pos - all_camera_params.focus_position);
+    if (runCommand(focus_str_cmd, file_descriptor, birger_output) == -1) {
         printf("Failed to move the focus to the beginning of the auto-focusing range.\n");
+        return -1;
     } else {
         printf("Focus moved to beginning of auto-focusing range.\n");
     }
 
     // print the focus to get new focus values and re-populate the camera params struct
-    cmd_status = runCommand("fp\r", file_descriptor, birger_output);
-    if (cmd_status == -1) {
+    if (runCommand("fp\r", file_descriptor, birger_output) == -1) {
         printf("Failed to print the new focus position.\n");
+        return -1;
     } 
 
-    // open the auto-focusing text file
-    af_file = fopen(AUTO_FOCUSING, "w");
+    if ((af_file = fopen(AUTO_FOCUSING, "w")) == NULL) {
+        fprintf(stderr, "Could not open observing file: %s.\n", strerror(errno));
+        return -1;
+    }
 
     // calculate distance between the end of the auto-focusing range and where the focus is now
     focus_diff = all_camera_params.end_focus_pos - all_camera_params.focus_position;
 
-    // step through each focus position from this position on
+    // step through each focus position from this position on 
     while (focus_diff >= all_camera_params.focus_step) {
-        // take three pictures per focus position
-        // for (int photo = 0; photo < 3; photo++) {
-        //     if (is_FreezeVideo(camera_handle, IS_WAIT) != IS_SUCCESS) {
-        //         printf("Error in taking auto-focusing picture %d.\n", photo);
-        //         return 0;
-        //     }
+        // take auto-focusing images at each position
+        // max_flux = focusImage(tm_info);
+        fprintf(af_file, "%3d\t%5d\n", -((all_camera_params.focus_position*all_camera_params.focus_position) - 2*all_camera_params.focus_position), 
+                                          all_camera_params.focus_position);
 
-        //     // get the image from memory
-        //     if (is_GetActSeqBuf(camera_handle, &buffer_num, &waiting_mem, &memory) != IS_SUCCESS) {
-        //         printf("Error retrieving the active image memory.\n");
-        //     }
+        // step size to next focus position is either the user-specified shift (all_camera_params.focus_step)
+        // or the distance between the current position and the end focus position, if this is smaller
+        focus_step = min(all_camera_params.focus_step, focus_diff);
 
-        //     // find the blobs in the image
-        //     int num_blobs = findBlobs(memory, CAMERA_WIDTH, CAMERA_HEIGHT, &star_x, &star_y, &star_mags, output_buffer);
-
-        //     // find the brightest blob per picture
-        //     double brightest_blob;
-        //     for (int blob = 0; blob < num_blobs; blob++) {
-        //         if (star_mags[blob] > brightest_blob) {
-        //             brightest_blob = star_mags[blob];
-        //         }
-        //     }
-
-        //     // make kst display the filtered image 
-        //     memcpy(memory, output_buffer, CAMERA_WIDTH*CAMERA_HEIGHT); 
-
-        //     // pointer for transmitting to user should point to where image is in memory
-        //     camera_raw = output_buffer;
-
-        //     // name picture accordingly and save
-        //     strftime(date, sizeof(date), "%Y-%m-%d_%H:%M:%S", tm_info);
-        //     swprintf(image_name, 200, L"/home/xscblast/Desktop/blastcam/BMPs/focus_%d_image%d_%s", 
-        //              all_camera_params.focus_position, photo, date);
-    	//     ImageFileParams.pwchFileName = image_name;
-    	//     if (is_ImageFile(camera_handle, IS_IMAGE_FILE_CMD_SAVE, (void *) &ImageFileParams, sizeof(ImageFileParams)) == -1) {
-        //         char * last_error_str;
-        //         int last_err = 0;
-            
-        //         is_GetError(camera_handle, &last_err, &last_error_str);
-        //         printf("Failed to save image, error string: %s\n", last_error_str);
-        //         exit(2);
-    	//     }
-        }
-
-        // find the brightest of the three brightest blobs and write it to text file with its corresponding focus
-        brightest_blob = -((all_camera_params.focus_position*all_camera_params.focus_position) - 2*all_camera_params.focus_position);
-        fprintf(af_file, "%3d\t%5d\n", brightest_blob, all_camera_params.focus_position);
-
-        // shift to next focus position according to desired step size
-        sprintf(focus_str_cmd, "mf %i\r", all_camera_params.focus_step);
-        cmd_status = runCommand(focus_str_cmd, file_descriptor, birger_output);
-        if (cmd_status == -1) {
+        // shift to next focus position according to step size
+        sprintf(focus_str_cmd, "mf %i\r", focus_step);
+        if (runCommand(focus_str_cmd, file_descriptor, birger_output) == -1) {
             printf("Failed to move the focus to the next focus position in auto-focusing range.\n");
-            return 0;
+            return -1;
         } else {
             printf("Focus moved to next focus position in auto-focusing range.\n");
         }
 
         // print the focus to get new focus values
-        cmd_status = runCommand("fp\r", file_descriptor, birger_output);
-        if (cmd_status == -1) {
+        if (runCommand("fp\r", file_descriptor, birger_output) == -1) {
             printf("Failed to print the new focus position.\n");
+            return -1;
         } 
 
-        // keep track of how many focus positions we have stepped through thus far
         num_focus_pos++;
 
         // update difference between maximum and current focus position
@@ -499,18 +442,17 @@ int autofocus(struct tm * tm_info) {
     }
 
     // do the process one last time for the final (current) focus position
-    brightest_blob = -((all_camera_params.focus_position*all_camera_params.focus_position) - 2*all_camera_params.focus_position);
-    fprintf(af_file, "%3d\t%5d\n", brightest_blob, all_camera_params.focus_position);
+    // max_flux = focusImage(tm_info);
+    fprintf(af_file, "%3d\t%5d\n", -((all_camera_params.focus_position*all_camera_params.focus_position) - 2*all_camera_params.focus_position), 
+                                      all_camera_params.focus_position);
 
-    // flush and close the auto-focusing file
     fflush(af_file);
     fclose(af_file);
     
     // now read in data from auto-focusing file (re-open in reading mode)
-    af_file = fopen(AUTO_FOCUSING, "r");
-    if (af_file == NULL) {
+    if ((af_file = fopen(AUTO_FOCUSING, "r")) == NULL) {
         fprintf(stderr, "Could not open observing file: %s.\n", strerror(errno));
-        return 0;
+        return -1;
     }
 
     // we can only initialize these arrays for flux and focus once we know the exact length (number of focus positions + 1)
@@ -531,15 +473,13 @@ int autofocus(struct tm * tm_info) {
     // perform quadratic regression on this data to find best fit curve
     if (quadRegression(flux_y, focus_x, num_focus_pos + 1) < 1) {
         printf("Unable to perform quadratic regression on auto-focusing data.\n");
-        return 0;
+        return -1;
     }
 
     // print the results of this regression
     printf("Best-fit equation for auto-focusing data is: flux = %.3f*x^2 + %.3f*x + %.3f, where x = focus.\n", a, b, c);
 
-    // find the maximum of this curve and its corresponding x (focus) coordinate:
-    // the derivative yprime = 2ax + b -> set this to 0 and solve.
-    // 2ax + b = 0 -> 2ax = -b -> x = -b/2a.
+    // find the maximum of this curve and its corresponding x (focus) coordinate: yprime = 2ax + b -> set this to 0 and solve.
     double focus_max = -b/(2*a);
     double flux_max = a*(focus_max*focus_max) + b*focus_max + c;
     // take second derivative to ensure this is a maximum
@@ -549,10 +489,12 @@ int autofocus(struct tm * tm_info) {
         printf("The largest flux found is %.3f.\n", flux_max);
         printf("Focus position corresponding to maximum brightness is %.3f. The nearest integer to this value is %.3f.\n", 
                 focus_max, round(focus_max));
-        return round(focus_max);
+        focus_max = round(focus_max);
+        return focus_max;
     } else {
-        // did not successfully find the max
-        return 0;
+        printf("Could not find focus position corresponding to maximum flux.\n");
+        // return something out of possible focus range to indicate error in process
+        return -1000;
     }
 }
 
@@ -563,28 +505,28 @@ int autofocus(struct tm * tm_info) {
 ** Output: None (void). Executes the commands and re-populates the camera params struct with the 
 ** updated values.
 */
-void adjustCameraHardware() {
-    // local variables for executing commands
+int adjustCameraHardware() {
     char focus_str_cmd[10]; 
     char aper_str_cmd[4]; 
     double current_exposure;
-    // for calculating desired change in focus for user
     int focus_shift;
+    int ret = 1;
 
     // if user set focus infinity command to true (1), execute this command and none of the other focus commands 
     // that would contradict this one
     if (all_camera_params.focus_inf == 1) {
-        cmd_status = runCommand("mi\r", file_descriptor, birger_output);
-        if (cmd_status == -1) {
+        if (runCommand("mi\r", file_descriptor, birger_output) == -1) {
             printf("Failed to set focus to infinity.\n");
+            ret = -1;
         } else {
             printf("Focus set to infinity.\n");
         }
 
-        cmd_status = runCommand("fp\r", file_descriptor, birger_output);
-        if (cmd_status == -1) {
+        if (runCommand("fp\r", file_descriptor, birger_output) == -1) {
             printf("Failed to print focus after setting to infinity.\n");
+            ret = -1;
         } 
+
     } else {
         // calculate the shift needed to get from current focus position to user-specified position
         focus_shift = all_camera_params.focus_position - all_camera_params.prev_focus_pos;
@@ -594,17 +536,17 @@ void adjustCameraHardware() {
             sprintf(focus_str_cmd, "mf %i\r", focus_shift);
 
             // shift the focus 
-            cmd_status = runCommand(focus_str_cmd, file_descriptor, birger_output);
-            if (cmd_status == -1) {
+            if (runCommand(focus_str_cmd, file_descriptor, birger_output) == -1) {
                 printf("Failed to move the focus to the desired position.\n");
+                ret = -1;
             } else {
                 printf("Focus moved to desired absolute position.\n");
             }
 
             // print focus position for confirmation
-            cmd_status = runCommand("fp\r", file_descriptor, birger_output);
-            if (cmd_status == -1) {
+            if (runCommand("fp\r", file_descriptor, birger_output) == -1) {
                 printf("Failed to print the new focus position.\n");
+                ret = -1;
             }  
         }
     }
@@ -615,9 +557,9 @@ void adjustCameraHardware() {
         // (don't have to get it with pa command)
         all_camera_params.current_aperture = 28;
 
-        cmd_status = runCommand("mo\r", file_descriptor, birger_output); 
-        if (cmd_status == -1) {
+        if (runCommand("mo\r", file_descriptor, birger_output) == -1) {
             printf("Setting the aperture to maximum fails.\n");
+            ret = -1;
         } else {
             printf("Set aperture to maximum.\n");
         }
@@ -626,17 +568,17 @@ void adjustCameraHardware() {
             sprintf(aper_str_cmd, "mn%i\r", all_camera_params.aperture_steps);
 
             // perform the aperture command
-            cmd_status = runCommand(aper_str_cmd, file_descriptor, birger_output);
-            if (cmd_status == -1) {
+            if (runCommand(aper_str_cmd, file_descriptor, birger_output) == -1) {
                 printf("Failed to adjust the aperture.\n");
+                ret = -1;
             } else {
                 printf("Adjusted the aperture successfully.\n");
             }
 
             // print new aperture position
-            cmd_status = runCommand("pa\r", file_descriptor, birger_output);
-            if (cmd_status == -1) {
+            if (runCommand("pa\r", file_descriptor, birger_output) == -1) {
                 printf("Failed to print the new aperture position.\n");
+                ret = -1;
             }
 
             // now that command in aperture has been executed, set aperture steps field to 0 since it should not
@@ -653,15 +595,19 @@ void adjustCameraHardware() {
         if (is_Exposure(camera_handle, IS_EXPOSURE_CMD_SET_EXPOSURE, (void *) &all_camera_params.exposure_time, 
                         sizeof(double)) != IS_SUCCESS) {
             printf("Adjusting exposure to user command unsuccessful.\n");
+            ret = -1;
         }
 
         // check with current_exposure that exposure has been adjusted to desired value
         if (is_Exposure(camera_handle, IS_EXPOSURE_CMD_GET_EXPOSURE, &current_exposure, sizeof(double)) != IS_SUCCESS) {
             printf("Could not check current exposure value.\n");
+            ret = -1;
+        } else {
+            printf("Exposure is now %f msec.\n", current_exposure);
         }
-
-        printf("Exposure is now %f msec.\n", current_exposure);
     }
+
+    return ret;
 }
 
 /* Function to execute built-in Birger commands.
@@ -671,18 +617,24 @@ void adjustCameraHardware() {
 */
 int runCommand(const char * command, int file, char * return_str) {
     fd_set input, output;
+    int status;
+
     FD_ZERO(&output);
     FD_SET(file, &output);
 
     if (!FD_ISSET(file, &output)) {
-        printf("Communication error in runCommand.\n");
+        fprintf(stderr, "File descriptor %d is not present in the set output: %s.\n", file, strerror(errno));
         return -1;
     }
 
-    tcflush(file, TCIOFLUSH);
-    int status = write(file, command, strlen(command));
+    if (tcflush(file, TCIOFLUSH) < 0) {
+        fprintf(stderr, "Error flushing non-transmitted output data, non-read input data, or both: %s.\n", strerror(errno));
+        return -1;
+    }
+
+    status = write(file, command, strlen(command));
     if (status < 0) {
-        printf("Write of command on file %d has failed; error %d.\n", file, errno);
+        fprintf(stderr, "Unable to write command %s to file descriptor %d: %s.\n", command, file, strerror(errno));
         return -1;
     }
 
@@ -692,7 +644,7 @@ int runCommand(const char * command, int file, char * return_str) {
     FD_SET(file, &input);
 
     if (!FD_ISSET(file, &input)) {
-        printf("Communication error in runCommand on read.\n");
+        fprintf(stderr, "File descriptor %d is not present in the set input: %s.\n", file, strerror(errno));
         return -1;
     }
 
@@ -700,7 +652,7 @@ int runCommand(const char * command, int file, char * return_str) {
     buffer[0] = '\0';
     status = read(file, buffer, 99);
     if (status <= 0) {
-        printf("Read fails in runCommand; errno = %d\n", errno);
+        fprintf(stderr, "Error reading from file descriptor %d: %s.\n", file, strerror(errno));
         return -1;
     }
 
@@ -712,6 +664,8 @@ int runCommand(const char * command, int file, char * return_str) {
     }
     
     // copy buffer over to returnStr for printing to terminal
+    return_str = malloc(100);
+    return_str[99] = '\0';
     strcpy(return_str, buffer);
     if (strcmp(command, "fp\r") == 0) {
         printf("%s\n", return_str);
@@ -744,5 +698,6 @@ int runCommand(const char * command, int file, char * return_str) {
     }
 
     free(buffer);
-    return 0;
+    free(return_str);
+    return 1;
 }

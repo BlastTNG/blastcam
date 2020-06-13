@@ -1,20 +1,18 @@
-// import necessary libraries
-#include <sys/types.h>      // socket
-#include <sys/socket.h>     // socket
-#include <string.h>         // memset
-#include <stdlib.h>         // sizeof
-#include <netinet/in.h>     // INADDR_ANY
+#include <sys/types.h>  
+#include <sys/socket.h> 
+#include <string.h>     
+#include <stdlib.h>     
+#include <netinet/in.h>     
 #include <stdio.h>          
 #include <arpa/inet.h>     
 #include <netdb.h>         
-#include <errno.h>          // interpreting errors
-#include <time.h>           // time functions
-#include <math.h>           // math functions
-#include <pthread.h>        // client handler thread
-#include <signal.h>         // signal handling (ctrl+c exception)
-#include <ueye.h>           // uEye camera operation
+#include <errno.h>      
+#include <time.h>  
+#include <math.h>  
+#include <pthread.h>      
+#include <signal.h>         
+#include <ueye.h>           
 
-// include our header files
 #include "camera.h"
 #include "astrometry.h"
 #include "lens_adapter.h"
@@ -39,6 +37,7 @@ struct commands {
     int start_focus_pos;    // where to start the auto-focusing process
     int end_focus_pos;      // where to end the auto-focusing process
     int focus_step;         // granularity of auto-focusing checker
+    int photos_per_focus;   // number of photos to take per auto-focusing position
     int set_focus_inf;      // 0 = false, 1 = true (whether or not to set the focus to infinity)
     int aperture_steps;     // number of shifts (+/-) needed to reach desired aperture
     int set_max_aperture;   // 0 = false, 1 = true (whether or not to maximize aperture)
@@ -58,13 +57,16 @@ struct args {
 /* Constants */
 #define PORT  8000
 
-// initialize instances of these structures (0 as beginning dummy value)
 struct commands all_cmds = {0};
 struct telemetry all_data = {0};
-// initialize pointer for storing address to current camera image bytes (accessible by camera.c)
-void * camera_raw;
-int command_lock = 0;       // if 1, then commanding is in use; if 0, then not
-int shutting_down = 0;      // if 0, then camera is not closing, so keep solving astrometry
+void * camera_raw = NULL;
+// if 1, then commanding is in use; if 0, then not
+int command_lock = 0;
+// if 0, then camera is not closing, so keep solving astrometry       
+int shutting_down = 0;      
+// return values for terminating the threads
+int astro_thread_ret;
+int client_thread_ret;
 
 /* Helper function for testing reception of user commands.
 ** Input: Nones.
@@ -78,6 +80,7 @@ void verifyUserCommands() {
     printf("Focusing mode: %s\n", (all_cmds.focus_mode) ? "Auto-focusing" : "Normal focusing");
     printf("Start focus position: %i, end focus position %i, focus step %i\n", all_cmds.start_focus_pos, all_cmds.end_focus_pos, 
                                                                                all_cmds.focus_step);
+    printf("Photos per focus: %d\n", all_cmds.photos_per_focus);
     printf("Focus position command: %f\n", all_cmds.focus_pos);
     printf("Set focus to infinity bool command: %i\n", all_cmds.set_focus_inf);
     printf("Aperture steps command: %i\n", all_cmds.aperture_steps);
@@ -86,7 +89,7 @@ void verifyUserCommands() {
     printf("Blob parameters: %f, %f, %f, %f, %f, %f, %f, %f, %f\n", all_cmds.blob_params[0], all_cmds.blob_params[1],
             all_cmds.blob_params[2], all_cmds.blob_params[3], all_cmds.blob_params[4], all_cmds.blob_params[5],
             all_cmds.blob_params[6], all_cmds.blob_params[7], all_cmds.blob_params[8]);
-    printf("***********************\n");
+    printf("***********************\n\n");
 }
 
 /* Helper function for testing transmission of telemetry.
@@ -107,7 +110,7 @@ void verifyTelemetryData() {
     printf("Latitude: %.15f\n", all_data.astrom.latitude);
     printf("Longitude: %.15f\n", all_data.astrom.longitude);
     printf("Height: %f\n", all_data.astrom.hm);
-    printf("***********************\n");
+    printf("***********************\n\n");
 }
 
 /* Function devoted to taking pictures and solving astrometry while camera is not in a state of shutting down.
@@ -119,6 +122,13 @@ void * updateAstrometry() {
     while (!shutting_down) {
         doCameraAndAstrometry();
     }
+
+    // when we are shutting down or exiting, close Astrometry engine and solver
+    closeAstrometry();
+
+    // terminate and exit thread
+    astro_thread_ret = 1;
+    pthread_exit(&astro_thread_ret);
 }
 
 /* Function for accepting newly connected clients and sending telemetry/receiving their commands.
@@ -165,6 +175,7 @@ void * processClient(void * for_client_thread) {
             all_camera_params.start_focus_pos = all_cmds.start_focus_pos;
             all_camera_params.end_focus_pos = all_cmds.end_focus_pos;
             all_camera_params.focus_step = all_cmds.focus_step;
+            all_camera_params.photos_per_focus = all_cmds.photos_per_focus;
 
             // if the command to set the focus to infinity is true (1), ignore any other commands the user might 
             // have put in for focus accidentally
@@ -180,7 +191,9 @@ void * processClient(void * for_client_thread) {
 
             // perform changes to camera settings in lens_adapter.c (the focus, aperture, and exposure 
             // deal with camera hardware)
-            adjustCameraHardware();
+            if (adjustCameraHardware() < 1) {
+                printf("Error executing at least one user command.\n");
+            }
 
             // process the blob parameters
             all_blob_params.make_static_hp_mask = all_cmds.make_hp;               // re-make static hot pixel map with new image (0 = off, 20 = re-make)
@@ -256,14 +269,15 @@ int main() {
     signal(SIGTERM, clean);
     signal(SIGPIPE, SIG_IGN);
 
-    int sockfd;                       // to create socket
-    int newsockfd;                    // to accept new connection
-    struct sockaddr_in serv_addr;     // server receives on this address
-    struct sockaddr_in client_addr;   // server sends to client on this address
-    struct timeval read_timeout;      // timeout options for server socket 
-    int client_addr_len;              // length of client addresses
-    pthread_t client_thread_id;       // thread ID for new client       
-    pthread_t astro_thread_id;        // thread ID for Astrometry thread
+    int sockfd;                         // to create socket
+    int newsockfd;                      // to accept new connection
+    struct sockaddr_in serv_addr;       // server receives on this address
+    struct sockaddr_in client_addr;     // server sends to client on this address
+    struct timeval read_timeout;        // timeout options for server socket 
+    int client_addr_len;                // length of client addresses
+    pthread_t client_thread_id;         // thread ID for new clients        
+    pthread_t astro_thread_id;          // thread ID for Astrometry thread
+    int * astro_ptr;                    // pointer for returning from Astrometry thread after termination
 
     printf("Size of all_data: %lu bytes\n", sizeof(all_data));
     printf("--------------------------------\n");
@@ -289,7 +303,7 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    // listen for connections from clients (maximum is 5 currently)
+    // listen for connections from clients (maximum is 5 waiting)
     if (listen(sockfd, 5) < 0) {
         fprintf(stderr, "Star Camera server unable to listen for clients: %s.\n", strerror(errno));
         exit(EXIT_FAILURE);
@@ -303,14 +317,20 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    // initialize the camera (inputs: 1 = load previous observing data for testing, 0 = take new data)
-    if (initCamera(0) < 0) {
-        return -1;             // ASK ABOUT THIS (versus exit(EXIT_FAILURE) - always hangs)
+    // initialize the camera
+    if (initCamera() < 0) {
+        printf("Could not initialize camera due to above error.\n");
+        // if camera was already initialized with is_InitCamera(), close it before exiting, otherwise program will hang
+        if (camera_handle > 0) {
+            closeCamera();
+        }
+        exit(EXIT_FAILURE);
     }
 
     // initialize the lens adapter
     if (initLensAdapter("/dev/ttyLens") < 0) {
-        fprintf(stderr, "Error opening file descriptor for lens /dev/ttyLens: %s\n", strerror(errno));
+        printf("Could not initialize lens adapter due to above error.\n");
+        closeCamera();
         exit(EXIT_FAILURE);
     }
 
@@ -321,7 +341,8 @@ int main() {
     }
 
     // loop forever, accepting new clients
-    while (newsockfd = accept(sockfd, (struct sockaddr *) &client_addr, &client_addr_len)) {
+    client_addr_len = sizeof(struct sockaddr_in); 
+    while ((!shutting_down) && (newsockfd = accept(sockfd, (struct sockaddr *) &client_addr, &client_addr_len))) {
         // parent process waiting to accept a new connection
         printf("\n******************************* Server waiting for new client connection: *******************************\n");
         // store length of client socket that has connected (if any)
@@ -330,18 +351,30 @@ int main() {
             printf("New client did not connect.\n");
         } else {
             // user did connect, so process their information for their respective client thread
-            printf("Connected to client: %s\n", inet_ntoa(client_addr.sin_addr)); 
+            printf("Connected to client %s.\n", inet_ntoa(client_addr.sin_addr)); 
             struct args * client_args = (struct args *) malloc(sizeof(struct args));
             client_args->user_socket = newsockfd;
             client_args->user_length = client_addr_len;
             client_args->user_address = client_addr;
             client_args->user_IP = inet_ntoa(client_addr.sin_addr);
+
             // create new thread for this new client
             if (pthread_create(&client_thread_id, NULL, processClient, (void *) client_args) < 0) {
-                perror("Could not create thread for new client.\n");
+                fprintf(stderr, "Error creating thread for new client: %s.\n", strerror(errno));
             }
         }
     }
 
-    return 1;
+    // join threads once the Astrometry thread has closed and terminated
+    pthread_join(astro_thread_id, (void **) &(astro_ptr));
+
+    closeCamera();
+
+    if (*astro_ptr == 1) {
+        printf("Successfully exited Astrometry.\n");
+        return 1;
+    } else {
+        printf("Did not return successfully from Astrometry thread.\n");
+        return 0;
+    }
 }

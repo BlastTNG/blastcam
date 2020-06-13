@@ -1,10 +1,9 @@
 #ifndef LENS_ADAPTER_H
 #define LENS_ADAPTER_H
 
-// define function prototypes 
 int initLensAdapter(char * path);                                   // function to initialize the lens adapter
 int autofocus(struct tm * tm_info);                                 // function to perform auto-focusing
-void adjustCameraHardware();                                        // perform user specifications on focus position and aperture
+int adjustCameraHardware();                                         // perform user specifications on focus position and aperture
 int runCommand(const char * command, int file, char * return_str);  // function run the input two-letter command
 
 // define global structure for camera parameters
@@ -27,6 +26,7 @@ struct camera_params {
   int start_focus_pos;        // where to start the auto-focusing process
   int end_focus_pos;          // where to end the auto-focusing process
   int focus_step;             // granularity of auto-focusing checker
+  int photos_per_focus;       // number of photos to take per auto-focusing position
 };
 #pragma pack(pop)
 

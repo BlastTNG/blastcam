@@ -1,7 +1,6 @@
 #ifndef ASTROMETRY_H
 #define ASTROMETRY_H
 
-// define function prototypes
 int initAstrometry();
 void closeAstrometry();
 int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned num_blobs, struct tm * tm_info, char * datafile);

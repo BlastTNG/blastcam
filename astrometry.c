@@ -1,4 +1,3 @@
-// include necessary libraries and astrometry code (solver.c, engine.c)
 #include <stdlib.h>
 #include <math.h>
 #include <astrometry/os-features.h>
@@ -17,7 +16,6 @@
 #include "/home/xscblast/astrometry/blind/solver.c"
 #include "/home/xscblast/astrometry/blind/engine.c"
 
-// include our header files
 #include "camera.h"
 #include "astrometry.h"
 #include "lens_adapter.h"
@@ -67,6 +65,7 @@ int initAstrometry() {
 ** Output: None (void).
 */
 void closeAstrometry() {	
+	printf("Closing Astrometry...\n");
 	engine_free(engine);
 	solver_free(solver);
 }
@@ -80,15 +79,12 @@ void closeAstrometry() {
 int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned num_blobs, struct tm * tm_info, char * datafile) {
 	// timers for astrometry
 	struct timespec astrom_tp_beginning, astrom_tp_end; 
-	// telemetry variables
-	double ra, dec, fr, ps, ir;
-	// integer value for returning based on achieving a solution or not 
+	double ra = 0.0, dec = 0.0, fr = 0.0, ps = 0.0, ir = 0.0;
 	int sol_status;
 	// for apportioning Julian dates
 	double d1, d2;
-	// for printing the time for checking
 	char time_display[100];
-	// for AltAz SOFA function ('ob' means observed)
+	// 'ob' means observed (observed frame versus ICRS frame)
 	double aob, zob, hob, dob, rob, eo;
 
 	// set up solver configuration
@@ -120,7 +116,7 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned n
 
 	// start timer for astrometry 
 	if (clock_gettime(CLOCK_REALTIME, &astrom_tp_beginning) == -1) {
-        printf("Error occurred when calling clock_gettime(), error # %d\n", errno);
+		fprintf(stderr, "Unable to start Astrometry timer: %s.\n", strerror(errno));
     }
 
 	starxy_set_x_array(field, star_x);
@@ -131,16 +127,10 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned n
 	solver_set_field(solver, field);
 	solver_set_field_bounds(solver, 0, CAMERA_WIDTH - 2*CAMERA_MARGIN, 0, CAMERA_HEIGHT - 2*CAMERA_MARGIN);
 
-	// add index files that are close to the guess for the target
+	// add index files
 	for (int i = 0; i < (int) pl_size((*engine).indexes); i++) {
 		index_t * index = (index_t *) pl_get((*engine).indexes, i);
-
-		if (ra >= -180 && dec >= -90 && index_is_within_range(index, ra, dec, dist2deg(hprange))) {
-			solver_add_index(solver, index);
-		} else if (ra < -180 || dec < -90) {
-			solver_add_index(solver, index);
-		}
-
+		solver_add_index(solver, index);
 		index_reload(index);
 	}
 
@@ -184,7 +174,7 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned n
 
 		// end timer
 		if (clock_gettime(CLOCK_REALTIME, &astrom_tp_end) == -1) {
-        	printf("Error occurred when calling clock_gettime(), error # %d\n", errno);
+        	fprintf(stderr, "Error ending Astrometry timer: %s.\n", strerror(errno));
     	}
 
 		// update astro struct with telemetry
@@ -210,12 +200,18 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned n
 
 		// write astrometry solution to data.txt file
 		printf("Writing Astrometry solution to data file...\n");
-		fptr = fopen(datafile, "a");
+
+    	if ((fptr = fopen(datafile, "a")) == NULL) {
+    	    fprintf(stderr, "Could not open observing file: %s.\n", strerror(errno));
+    	    return -1;
+    	}
+
 		if (fprintf(fptr, "%i|%lf|%lf|%lf|%lf|%.15f|%.15f|%lf|%f", num_blobs, all_astro_params.ra, all_astro_params.dec, 
 					all_astro_params.fr, all_astro_params.ps, all_astro_params.alt, all_astro_params.az, 
 					all_astro_params.ir, astrom_time*1e-6) < 0) {
-			printf("Error occurred writing Astrometry solution to observing file, error # %d\n", errno);
+			fprintf(stderr, "Error writing Astrometry solution to observing file: %s.\n", strerror(errno));
 		}
+		fflush(fptr);
 		fclose(fptr);
 
 		// we achieved a solution!

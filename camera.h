@@ -33,16 +33,17 @@ struct blob_params {
 // make all blob_params acessible from any file that includes camera.h
 extern struct blob_params all_blob_params;
 
-// define function prototypes
-void setCameraParams(unsigned int cameraHandle);
-int setSaveImage();
+int setCameraParams();
+void setSaveImage();
 int loadCamera();
-int initCamera(int load_prev_data);
-void doCameraAndAstrometry();
+int initCamera();
+int doCameraAndAstrometry();
 void clean();
+void closeCamera();
+const char * printCameraError();
 int isLeapYear(int year);
 void verifyBlobParams();
-int makeTable(char * filename, char * buffer, double * star_mags, double * star_x, double * star_y, int blob_count);
+int makeTable(char * filename, double * star_mags, double * star_x, double * star_y, int blob_count);
 int findBlobs(char * input_buffer, int w, int h, double ** star_x, double ** star_y, double ** star_mags, char * output_buffer);
 
 #endif 
