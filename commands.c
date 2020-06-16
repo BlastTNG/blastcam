@@ -310,7 +310,7 @@ int main() {
     }
 
     // make server socket non-blocking (times out after a certain time)
-    read_timeout.tv_sec = 2.5;
+    read_timeout.tv_sec = 3;
     read_timeout.tv_usec = 0;
     if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &read_timeout, sizeof(read_timeout)) < 0) {
         fprintf(stderr, "Error setting Star Camera server socket timeout: %s.\n", strerror(errno));

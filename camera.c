@@ -11,6 +11,7 @@
 #include "astrometry.h"
 #include "commands.h"
 #include "lens_adapter.h"
+#include "matrix.h"
 
 void merge(double A[], int p, int q, int r, double X[],double Y[]);
 void part(double A[], int p, int r, double X[], double Y[]);
@@ -979,20 +980,19 @@ int doCameraAndAstrometry() {
         printf("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ No longer auto-focusing. Proceeding to take observing images... ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
         
         // capture an image 
-        // printf("Taking a new image...\n");
-        // if (is_FreezeVideo(camera_handle, IS_WAIT) != IS_SUCCESS) {
-        //     printf("Failed to capture new image.");
-        //     exit(2);
-        // } else {
+        printf("Taking a new image...\n");
+        if (is_FreezeVideo(camera_handle, IS_WAIT) != IS_SUCCESS) {
+            printf("Failed to capture new image.");
+        } 
+
         // get current time right after exposure
         if (clock_gettime(CLOCK_REALTIME, &camera_tp_beginning) == -1) {
             fprintf(stderr, "Error starting camera timer: %s.\n", strerror(errno));
         }
-        // }
 
         // name new image file with time
-        // strftime(date, sizeof(date), "/home/xscblast/Desktop/blastcam/BMPs/saved_image_%Y-%m-%d_%H:%M:%S.bmp", tm_info);
-        // swprintf(filename, 200, L"%s", date);
+        strftime(date, sizeof(date), "/home/xscblast/Desktop/blastcam/BMPs/saved_image_%Y-%m-%d_%H:%M:%S.bmp", tm_info);
+        swprintf(filename, 200, L"%s", date);
 
         // get the image from memory
         if (is_GetActSeqBuf(camera_handle, &buffer_num, &waiting_mem, &memory) != IS_SUCCESS) {
@@ -1000,18 +1000,18 @@ int doCameraAndAstrometry() {
         }
 
         // testing pictures that have already been taken 
-        if (loadDummyPicture(L"/home/xscblast/Desktop/blastcam/BMPs/saved_image_2020-04-22_02:00:59.bmp", &memory) == 1) {
-            printf("Successfully loaded test picture.\n");
-        } else {
-            fprintf(stderr, "Error loading test picture: %s.\n", strerror(errno));
-            // can't solve without a picture to solve on!
-            usleep(1000000);
-            return -1;
-        }
+        // if (loadDummyPicture(L"/home/xscblast/Desktop/blastcam/BMPs/saved_image_2020-06-13_03:10:34.bmp", &memory) == 1) {
+        //     printf("Successfully loaded test picture.\n");
+        // } else {
+        //     fprintf(stderr, "Error loading test picture: %s.\n", strerror(errno));
+        //     // can't solve without a picture to solve on!
+        //     usleep(1000000);
+        //     return -1;
+        // }
 
         // find the blobs in the image
         int blob_count = findBlobs(memory, CAMERA_WIDTH, CAMERA_HEIGHT, &star_x, &star_y, &star_mags, output_buffer);
-
+    
         // make kst display the filtered image 
         memcpy(memory, output_buffer, CAMERA_WIDTH*CAMERA_HEIGHT); 
 
@@ -1020,19 +1020,17 @@ int doCameraAndAstrometry() {
 
     	// save image
     	ImageFileParams.pwchFileName = filename;
-    	if (is_ImageFile(-1, IS_IMAGE_FILE_CMD_SAVE, (void *) &ImageFileParams, sizeof(ImageFileParams)) == -1) {
-            char * last_error_str;
-            int last_err = 0;
-            is_GetError(camera_handle, &last_err, &last_error_str);
-            printf("Failed to save image, error string: %s\n", last_error_str);
+    	if (is_ImageFile(camera_handle, IS_IMAGE_FILE_CMD_SAVE, (void *) &ImageFileParams, sizeof(ImageFileParams)) == -1) {
+            const char * last_error_str = printCameraError();
+            printf("Failed to save image: %s\n", last_error_str);
             return -1;
     	}
 
-        // wprintf(L"Saving to \"%s\"\n", filename);
+        wprintf(L"Saving to \"%s\"\n", filename);
         // unlink whatever the latest saved image was linked to before
-        // unlink("/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
+        unlink("/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
         // symbolically link current date to latest image for kst to pull from for live updates
-        // symlink(date, "/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
+        symlink(date, "/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
 
         // data file for writing to pass to lostInSpace
         strftime(datafile, sizeof(datafile), "/home/xscblast/Desktop/blastcam/data_%b-%d.txt", tm_info); 
@@ -1102,6 +1100,7 @@ int doCameraAndAstrometry() {
 
         // solve astrometry
         printf("Trying to solve astrometry...\n");
+        //blob_count = min(blob_count, 30);
         if (lostInSpace(star_x, star_y, star_mags, blob_count, tm_info, datafile) != 1) {
             printf("Could not solve Astrometry.\n");
         }
@@ -1115,7 +1114,7 @@ int doCameraAndAstrometry() {
 	    double start = (double) (camera_tp_beginning.tv_sec*1e9) + (double) camera_tp_beginning.tv_nsec;
 	    double end = (double) (camera_tp_end.tv_sec*1e9) + (double) camera_tp_end.tv_nsec;
         double camera_time = end - start;
-	    printf("Camera solved in %f msec.\n", camera_time*1e-6);
+	    printf("Camera completed one iteration in %f msec.\n", camera_time*1e-6);
 
         // write this time to the data file
         fptr = fopen(datafile, "a");

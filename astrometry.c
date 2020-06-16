@@ -22,9 +22,9 @@
 
 #define _USE_MATH_DEFINES
 /* Longitude and latitude constants (deg) */
-#define backyard_lat   40.79166879
-#define backyard_long -73.68133399
-#define backyard_hm    59.24
+#define backyard_lat   40.79149378
+#define backyard_long -73.68089614
+#define backyard_hm    58.17
 
 engine_t * engine = NULL;
 solver_t * solver = NULL;
@@ -32,6 +32,7 @@ FILE * fptr;
 
 /* Astrometry parameters global structure, accessible from commands.c as well */
 struct astrometry all_astro_params = {
+	.timelimit = 30,
 	.rawtime = 0,
 	.logodds = 1e8,
 	.latitude = backyard_lat,
@@ -46,6 +47,20 @@ struct astrometry all_astro_params = {
 	.az = 0,
 };
 
+/* Function to decrement a counter for tracking Astrometry timeout.
+** Input: The pointer to the counter.
+** Output: If the counter has reached zero yet (or not).
+*/
+time_t timeout(void * arg) {
+	int * counter = (int *) arg;
+	if (*(counter) != 0) {
+		counter--;
+	} 
+
+	return (*counter != 0);
+}
+
+
 /* Function to initialize astrometry.
 ** Input: None.
 ** Output: Flag indicating successful initialization (or not) of Astrometry system
@@ -57,6 +72,11 @@ int initAstrometry() {
 		printf("Bad configuration file in Astrometry constructor.\n");
 		return -1;
 	}
+
+	// set solver timeout
+	solver->timer_callback = timeout;
+	solver->userdata = &all_astro_params.timelimit;
+
 	return 1;
 }
 
@@ -86,6 +106,10 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned n
 	char time_display[100];
 	// 'ob' means observed (observed frame versus ICRS frame)
 	double aob, zob, hob, dob, rob, eo;
+
+	// reset solver timeout
+	all_astro_params.timelimit = 30;
+	printf("Astrometry timeout is %i\n", *((int *) solver->userdata));
 
 	// set up solver configuration
 	solver->funits_lower = MIN_PS;

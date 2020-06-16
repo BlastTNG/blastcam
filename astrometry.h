@@ -8,6 +8,7 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned n
 // global structure for astrometry parameters
 #pragma pack(push, 1)
 struct astrometry {
+    int timelimit;
     double rawtime;
     // needed for solving altaz
     double logodds;

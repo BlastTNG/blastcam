@@ -314,11 +314,14 @@ int focusImage(struct tm * tm_info) {
     int blob_mags[3];
     wchar_t image_name[200] = L"";
     char date[256];
-    int brightest_blob;
-    static double * star_x = NULL, * star_y = NULL, * star_mags = NULL;
+    int brightest_blob = 0;
+    static double * star_x = NULL;
+    static double * star_y = NULL;
+    static double * star_mags = NULL;
     static char * output_buffer = NULL;
 
     for (int photo = 0; photo < all_camera_params.photos_per_focus; photo++) {
+        // take however many auto-focusing pictures
         if (is_FreezeVideo(camera_handle, IS_WAIT) != IS_SUCCESS) {
             printf("Error taking auto-focusing picture %d.\n", photo);
             return -1;
@@ -343,11 +346,14 @@ int focusImage(struct tm * tm_info) {
 
         // make kst display the filtered image 
         memcpy(memory, output_buffer, CAMERA_WIDTH*CAMERA_HEIGHT);
-        // pointer for transmitting to user should point to where image is in memory
+
+        // pointer for transmitting to user GUI should point to where image is in memory
         camera_raw = output_buffer;
+
         // name picture accordingly and save
         strftime(date, sizeof(date), "%Y-%m-%d_%H:%M:%S", tm_info);
-        swprintf(image_name, 200, L"/home/xscblast/Desktop/blastcam/BMPs/focus_%d_image%d_%s", all_camera_params.focus_position, photo, date);
+        swprintf(image_name, 200, L"/home/xscblast/Desktop/blastcam/BMPs/focus_%d_image%d_%s", all_camera_params.focus_position, 
+                                                                                               photo, date);
         ImageFileParams.pwchFileName = image_name;
         if (is_ImageFile(camera_handle, IS_IMAGE_FILE_CMD_SAVE, (void *) &ImageFileParams, sizeof(ImageFileParams)) == -1) {
             const char * last_error_str = printCameraError();
@@ -356,7 +362,7 @@ int focusImage(struct tm * tm_info) {
         }
     }
 
-    // find the brightest of the three brightest blobs and write it to text file with its corresponding focus
+    // find the brightest of the three brightest blobs
     for (int i = 0; i < 3; i++) {
         if (blob_mags[i] > max_flux) {
             max_flux = blob_mags[i];
@@ -375,6 +381,7 @@ int autofocus(struct tm * tm_info) {
     int focus_diff;
     int num_focus_pos = 0;
     int focus_step = all_camera_params.focus_step;
+    int max_flux;
     FILE * af_file;
     char * af_line = NULL;
     size_t af_len = 0;
@@ -412,9 +419,8 @@ int autofocus(struct tm * tm_info) {
     // step through each focus position from this position on 
     while (focus_diff >= all_camera_params.focus_step) {
         // take auto-focusing images at each position
-        // max_flux = focusImage(tm_info);
-        fprintf(af_file, "%3d\t%5d\n", -((all_camera_params.focus_position*all_camera_params.focus_position) - 2*all_camera_params.focus_position), 
-                                          all_camera_params.focus_position);
+        max_flux = focusImage(tm_info);
+        fprintf(af_file, "%3d\t%5d\n", max_flux, all_camera_params.focus_position);
 
         // step size to next focus position is either the user-specified shift (all_camera_params.focus_step)
         // or the distance between the current position and the end focus position, if this is smaller
@@ -442,9 +448,8 @@ int autofocus(struct tm * tm_info) {
     }
 
     // do the process one last time for the final (current) focus position
-    // max_flux = focusImage(tm_info);
-    fprintf(af_file, "%3d\t%5d\n", -((all_camera_params.focus_position*all_camera_params.focus_position) - 2*all_camera_params.focus_position), 
-                                      all_camera_params.focus_position);
+    max_flux = focusImage(tm_info);
+    fprintf(af_file, "%3d\t%5d\n", max_flux, all_camera_params.focus_position);
 
     fflush(af_file);
     fclose(af_file);
@@ -458,7 +463,7 @@ int autofocus(struct tm * tm_info) {
     // we can only initialize these arrays for flux and focus once we know the exact length (number of focus positions + 1)
     int flux_y[num_focus_pos + 1];
     int focus_x[num_focus_pos + 1];
-    // read every line in the files
+    // read every line in the file
     printf("\n");
     while ((af_read = getline(&af_line, &af_len, af_file)) != -1) {
         sscanf(af_line, "%d\t%d\n", &flux, &focus);
@@ -482,8 +487,10 @@ int autofocus(struct tm * tm_info) {
     // find the maximum of this curve and its corresponding x (focus) coordinate: yprime = 2ax + b -> set this to 0 and solve.
     double focus_max = -b/(2*a);
     double flux_max = a*(focus_max*focus_max) + b*focus_max + c;
+
     // take second derivative to ensure this is a maximum
     double ydoubleprime = 2*a;
+
     if (ydoubleprime < 0) {
         // if the second derivative at the maximum is negative, it is truly a maximum
         printf("The largest flux found is %.3f.\n", flux_max);
@@ -526,7 +533,6 @@ int adjustCameraHardware() {
             printf("Failed to print focus after setting to infinity.\n");
             ret = -1;
         } 
-
     } else {
         // calculate the shift needed to get from current focus position to user-specified position
         focus_shift = all_camera_params.focus_position - all_camera_params.prev_focus_pos;
