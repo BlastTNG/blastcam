@@ -711,7 +711,6 @@ static double get_tolerance(solver_t* solver) {
  already determined which other stars will create valid codes (ie, are
  in the "box").  Now we want to build features using all sets of valid
  stars (without permutations).
-
  pq - data associated with the AB pair.
  field - the array of field star numbers
  fieldoffset - offset into the field array where we should add the first star
@@ -915,7 +914,7 @@ void solver_run(solver_t* solver) {
             }
 
             solver->last_examined_object = newpoint;
-            // quads with the new star on the diagonal:
+            // quads with thei put new star on the diagonal:
             field[B] = newpoint;
             debug("Trying quads with B=%i\n", newpoint);
 	
@@ -1157,26 +1156,21 @@ static void try_permutations(const int* origstars, int dimquad,
      This is a recursive function that tries all combinations of the
      "internal" stars (ie, not stars A,B that form the "backbone" of
      the quad).
-
      We fill the "stars" array with the star IDs (from "origstars") of
      the stars that form the quad, while simultaneously filling the
      "code" array with the corresponding code coordinates (from
      "origcode").
-
      For example, if "dimquad" is 5, and "origstars" contains
      A,B,C,D,E, we want to call "resolve_matches" with the following
      combinations in "stars":
-
      AB CDE
      AB CED
      AB DCE
      AB DEC
      AB ECD
      AB EDC
-
      This call will try to put each star in "slot" in turn, then for
      each one recurse to "slot" in the rest of the stars.
-
      Note that we are filling stars[2], stars[3], etc; the first two
      elements are already filled by stars A and B.
      */
@@ -1594,7 +1588,6 @@ static int solver_handle_hit(solver_t* sp, MatchObj* mo, sip_t* verifysip,
          solve-field --config backend.cfg Geminid2007_pacholka850wp.xy \
          --scale-low 10 --scale-units degwidth -v --no-tweak --continue --new-fits none \
          -o 4 --crpix-center --depth 40-45
-
          printf("Original WCS:\n");
          tan_print_to(&(mo->wcstan), stdout);
          printf("\n");

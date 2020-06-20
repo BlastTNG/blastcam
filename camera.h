@@ -16,17 +16,17 @@ extern int shutting_down;
 // global structure for blob parameters
 #pragma pack(push, 1)
 struct blob_params {
-  int spike_limit;             // how agressive is the dynamic hot pixel finder. Small is more agressive
-  int dynamic_hot_pixels;      // 0 == off, 1 == on
-  int r_smooth;                // image smooth filter radius [px]
-  int high_pass_filter;        // 0 == off, 1 == on
-  int r_high_pass_filter;      // image high pass filter radius [px]
-  int centroid_search_border;  // distance from image edge from which to start looking for stars [px]
-  int filter_return_image;     // 1 == true; 0 = false
-  float n_sigma;               // pixels brighter than this times the noise in the filtered map are blobs (this number * sigma + mean)
-  int unique_star_spacing;     // min. pixel spacing betwen stars [px]
-  int make_static_hp_mask;     // flag to re-make the static hot pixel map with the current image
-  int use_static_hp_mask;      // flag to use the current static hot pixel map
+    int spike_limit;            // where dynamic hot pixel will designate as hp
+    int dynamic_hot_pixels;     // (bool) search for dynamic hot pixels
+    int r_smooth;               // image smooth filter radius [px]
+    int high_pass_filter;       // 0 == off, 1 == on
+    int r_high_pass_filter;     // image high pass filter radius [px]
+    int centroid_search_border; // px dist from image edge to start star search
+    int filter_return_image;    // 1 == true; 0 = false
+    float n_sigma;              // pixels > this*noise + mean = blobs
+    int unique_star_spacing;    // min. pixel spacing betwen stars [px]
+    int make_static_hp_mask;    // re-make static hp map with current image
+    int use_static_hp_mask;     // flag to use the current static hot pixel map
 };
 #pragma pack(pop)
 
@@ -43,7 +43,9 @@ void closeCamera();
 const char * printCameraError();
 int isLeapYear(int year);
 void verifyBlobParams();
-int makeTable(char * filename, double * star_mags, double * star_x, double * star_y, int blob_count);
-int findBlobs(char * input_buffer, int w, int h, double ** star_x, double ** star_y, double ** star_mags, char * output_buffer);
+int makeTable(char * filename, double * star_mags, double * star_x, 
+              double * star_y, int blob_count);
+int findBlobs(char * input_buffer, int w, int h, double ** star_x, 
+              double ** star_y, double ** star_mags, char * output_buffer);
 
 #endif 

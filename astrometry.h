@@ -3,12 +3,13 @@
 
 int initAstrometry();
 void closeAstrometry();
-int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned num_blobs, struct tm * tm_info, char * datafile);
+int lostInSpace(double * star_x, double * star_y, double * star_mags, 
+                unsigned num_blobs, struct tm * tm_info, char * datafile);
 
 // global structure for astrometry parameters
 #pragma pack(push, 1)
 struct astrometry {
-    int timelimit;
+    double timelimit;
     double rawtime;
     // needed for solving altaz
     double logodds;
