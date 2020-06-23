@@ -23,7 +23,6 @@ HIDS camera_handle = 12;
 IMAGE_FILE_PARAMS ImageFileParams;
 // same with sensorInfo struct
 SENSORINFO sensorInfo;
-FILE * fptr;
 
 // global variables
 int default_focus_photos = 3;
@@ -975,6 +974,7 @@ int doCameraAndAstrometry() {
     static char * output_buffer = NULL;
     static int first_time = 1, af_photo = 0;
     static FILE * af_file = NULL;
+    static FILE * fptr = NULL;
     static int num_focus_pos;
     static int * blob_mags;
     //static int blob_mags[3];
@@ -1010,6 +1010,14 @@ int doCameraAndAstrometry() {
     // data file to pass to lostInSpace
     strftime(datafile, sizeof(datafile), 
              "/home/xscblast/Desktop/blastcam/data_%b-%d.txt", tm_info);
+    
+    // set file descriptor for observing file to NULL in case of previous bad
+    // shutdown
+    if (fptr != NULL) {
+        fclose(fptr);
+        fptr = NULL;
+    }
+    
     if ((fptr = fopen(datafile, "a")) == NULL) {
         fprintf(stderr, "Could not open obs. file: %s.\n", strerror(errno));
         return -1;
@@ -1161,7 +1169,6 @@ int doCameraAndAstrometry() {
     // make kst display the filtered image 
     memcpy(memory, output_buffer, CAMERA_WIDTH*CAMERA_HEIGHT); 
 
-
     // pointer for transmitting to user should point to where image is in memory
     camera_raw = output_buffer;
     // save image for future reference
@@ -1229,8 +1236,8 @@ int doCameraAndAstrometry() {
                    all_camera_params.focus_position,
                    max_flux);
             // remove this when no longer testing
-            max_flux = -(all_camera_params.focus_position*all_camera_params.focus_position) + 
-                        (2*all_camera_params.focus_position);
+            // max_flux = -(all_camera_params.focus_position*all_camera_params.focus_position) + 
+            //             (2*all_camera_params.focus_position);
             
             fprintf(af_file, "%3d\t%5d\n", max_flux,
                     all_camera_params.focus_position);
@@ -1319,6 +1326,7 @@ int doCameraAndAstrometry() {
         }
         fflush(fptr);
         fclose(fptr);
+        fptr = NULL;
     }
 
     return 1;
