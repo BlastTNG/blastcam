@@ -176,49 +176,25 @@ void * processClient(void * for_client_thread) {
             printf("User %s sent commands. Executing...\n", ip_addr);
             verifyUserCommands();
 
-            // update astro params struct with user commands (cmd struct values)
-            all_astro_params.logodds = all_cmds.logodds;
-            all_astro_params.latitude = all_cmds.latitude;
-            all_astro_params.longitude = all_cmds.longitude;
-            all_astro_params.hm = all_cmds.height;
-            // if user adjusted exposure, set exposure to their desired value
-            if (ceil(all_cmds.exposure) != 
-                ceil(all_camera_params.exposure_time)) {
-                // update value in camera params struct as well
-                all_camera_params.exposure_time = all_cmds.exposure;
-                all_camera_params.change_exposure_bool = 1;
+            // performing auto-focusing will restrict some of the other cmds, so
+            // check that first
+            if (all_cmds.focus_mode) {
+                all_camera_params.begin_auto_focus = 1;
             }
-
-            // update Astrometry timeout
-            all_astro_params.timelimit = all_cmds.timelimit;
-
-            // pass auto-focusing commands to camera settings struct from 
-            // commands struct
             all_camera_params.focus_mode = all_cmds.focus_mode;
             all_camera_params.start_focus_pos = all_cmds.start_focus_pos;
             all_camera_params.end_focus_pos = all_cmds.end_focus_pos;
             all_camera_params.focus_step = all_cmds.focus_step;
             all_camera_params.photos_per_focus = all_cmds.photos_per_focus;
 
-            // if command to set focus to infinity is true (1), ignore any other
-            // commands the user might have put in for focus accidentally
-            all_camera_params.focus_inf = all_cmds.set_focus_inf;
-            // if user wants to change focus, change focus in camera params
-            if (all_cmds.focus_pos != -1) {
-                all_camera_params.focus_position = all_cmds.focus_pos; 
-            } 
-                
-            // update camera params struct with user commands
-            all_camera_params.max_aperture = all_cmds.set_max_aperture;
-            all_camera_params.aperture_steps = all_cmds.aperture_steps;
+            // some constants for solving Astrometry
+            all_astro_params.logodds = all_cmds.logodds;
+            all_astro_params.latitude = all_cmds.latitude;
+            all_astro_params.longitude = all_cmds.longitude;
+            all_astro_params.hm = all_cmds.height;
+            all_astro_params.timelimit = all_cmds.timelimit;
 
-            // perform changes to camera settings in lens_adapter.c (focus, 
-            // aperture, and exposure deal with camera hardware)
-            if (adjustCameraHardware() < 1) {
-                printf("Error executing at least one user command.\n");
-            }
-
-            // process the blob parameters (see camera.h for documentation)
+            // update blob-finding parameters (see camera.h for documentation)
             all_blob_params.make_static_hp_mask = all_cmds.make_hp;            
             all_blob_params.use_static_hp_mask = all_cmds.use_hp;                 
 
@@ -251,6 +227,38 @@ void * processClient(void * for_client_thread) {
             if (all_cmds.blob_params[8] >= 0) {
                 all_blob_params.unique_star_spacing = all_cmds.blob_params[8];
             } 
+
+            if (!all_camera_params.focus_mode) {
+                // if user adjusted exposure, set exposure to their value
+                if (ceil(all_cmds.exposure) != 
+                    ceil(all_camera_params.exposure_time)) {
+                    // update value in camera params struct as well
+                    all_camera_params.exposure_time = all_cmds.exposure;
+                    all_camera_params.change_exposure_bool = 1;
+                }
+
+                // contradictory commands between setting focus to inf and 
+                // adjusting it to a different position are handled in 
+                // adjustCameraHardware()
+                all_camera_params.focus_inf = all_cmds.set_focus_inf;
+                // if user wants to change focus, change focus in camera params
+                if (all_cmds.focus_pos != -1) {
+                    all_camera_params.focus_position = all_cmds.focus_pos; 
+                } 
+
+                // update camera params struct with user commands
+                all_camera_params.max_aperture = all_cmds.set_max_aperture;
+                all_camera_params.aperture_steps = all_cmds.aperture_steps;
+
+                // perform changes to camera settings in lens_adapter.c (focus, 
+                // aperture, and exposure deal with camera hardware)
+                if (adjustCameraHardware() < 1) {
+                    printf("Error executing at least one user command.\n");
+                }
+            } else {
+                printf("In or entering auto-focusing mode, so ignoring lens "
+                       "commands.\n");
+            }
 
             // allow other clients to execute commands (unlock)
             command_lock = 0; 

@@ -24,7 +24,7 @@ struct blob_params {
     int centroid_search_border; // px dist from image edge to start star search
     int filter_return_image;    // 1 == true; 0 = false
     float n_sigma;              // pixels > this*noise + mean = blobs
-    int unique_star_spacing;    // min. pixel spacing betwen stars [px]
+    int unique_star_spacing;    // min. pixel spacing between stars [px]
     int make_static_hp_mask;    // re-make static hp map with current image
     int use_static_hp_mask;     // flag to use the current static hot pixel map
 };

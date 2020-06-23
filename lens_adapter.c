@@ -86,8 +86,8 @@ struct camera_params all_camera_params = {
     .focus_mode = 1,           // camera begins in auto-focusing mode by default
     .start_focus_pos = 0,      // starting focus for auto-focusing search
     .end_focus_pos = 0,        // ending focus position also set below
-    .focus_step = 100,         // by default, check every fifth focus position
-    .photos_per_focus = 2,     // take 3 pictures per focus position by default
+    .focus_step = 10,          // by default, check every fifth focus position
+    .photos_per_focus = 3,     // take 3 pictures per focus position by default
 };
 
 char * birger_output, * buffer;
@@ -362,6 +362,8 @@ int defaultFocusPosition() {
     char focus_str_cmd[10];
 
     printf("MOVING TO DEFAULT FOCUS POSITION...\n");
+    printf("Default focus = %d, all_camera_params.focus_position = %d, default focus - focus position = %d\n", 
+           default_focus, all_camera_params.focus_position, default_focus - all_camera_params.focus_position);
     sprintf(focus_str_cmd, "mf %i\r", 
             default_focus - all_camera_params.focus_position);
     if (runCommand(focus_str_cmd, file_descriptor, birger_output) == -1) {

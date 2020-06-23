@@ -32,7 +32,7 @@ int solver_timelimit;
 
 /* Astrometry parameters global structure, accessible from commands.c as well */
 struct astrometry all_astro_params = {
-	.timelimit = 30,
+	.timelimit = 10,
 	.rawtime = 0,
 	.logodds = 1e8,
 	.latitude = backyard_lat,
@@ -55,8 +55,17 @@ time_t timeout(void * arg) {
 	int * counter = (int *) arg;
 
 	if (*(counter) != 0) {
-		counter--;
+		printf("Have yet to solve Astrometry. Decrementing time counter...\n");
+		(*counter)--;
+		printf("Timeout counter is now %d.\n", *counter);
 	} 
+
+	// if we are shutting down, we don't want to keep trying to solve (we just
+	// want to abort altogether)
+	if (shutting_down) {
+		printf("Shutting down -> zeroing timeout counter.\n");
+		*counter = 0;
+	}
 
 	return (*counter != 0);
 }
@@ -109,14 +118,13 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned
 	double ra, dec, fr, ps, ir;
 	// for apportioning Julian dates
 	double d1, d2;
-	char time_display[100];
 	// 'ob' means observed (observed frame versus ICRS frame)
 	double aob, zob, hob, dob, rob, eo;
 	FILE * fptr;
 
 	// reset solver timeout
 	solver_timelimit = (int) all_astro_params.timelimit;
-	printf("Astrometry timeout is %i.\n", *((int *) solver->userdata));
+	printf("Astrometry timeout is %i cycles.\n", *((int *) solver->userdata));
 
 	// set up solver configuration
 	solver->funits_lower = MIN_PS;
@@ -187,8 +195,6 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned
 		fr = tan_get_orientation(wcs); 
 
 		// calculate Julian date
-		strftime(time_display, sizeof(time_display), "%b %d %H:%M:%S", tm_info); 
-		printf("Time going into iauDtf2d in lostInSpace(): %s\n", time_display);
 		if (iauDtf2d("UTC", tm_info->tm_year + 1900, tm_info->tm_mon + 1, 
 		                    tm_info->tm_mday, tm_info->tm_hour, tm_info->tm_min,
 							(double) tm_info->tm_sec, &d1, &d2) != 0) {

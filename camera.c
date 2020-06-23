@@ -26,6 +26,7 @@ SENSORINFO sensorInfo;
 FILE * fptr;
 
 // global variables
+int default_focus_photos = 3;
 int buffer_num, shutting_down, mem_id;
 char * memory, * waiting_mem, * mem_starting_ptr;
 unsigned char * mask;
@@ -51,7 +52,7 @@ struct blob_params all_blob_params = {
     .n_sigma = 2.0,               
     .unique_star_spacing = 15,    
     .make_static_hp_mask = 0,     
-    .use_static_hp_mask = 0,       
+    .use_static_hp_mask = 1,       
 };
 
 /* Helper function to determine if a year is a leap year (2020 is a leap year).
@@ -973,10 +974,10 @@ int doCameraAndAstrometry() {
     static double * star_x = NULL, * star_y = NULL, * star_mags = NULL;
     static char * output_buffer = NULL;
     static int first_time = 1, af_photo = 0;
-    static FILE * af_file;
+    static FILE * af_file = NULL;
     static int num_focus_pos;
-    // static int * blob_mags = calloc(all_camera_params.photos_per_focus, sizeof(int));
-    static int blob_mags[3];
+    static int * blob_mags;
+    //static int blob_mags[3];
     int blob_count;
     static int skip_image = 0;
     char datafile[100], buff[100], date[256];
@@ -1028,6 +1029,8 @@ int doCameraAndAstrometry() {
                             "transmission: %s.\n", strerror(errno));
             return -1;
         }
+
+        blob_mags = calloc(default_focus_photos, sizeof(int));
 
         // get frame rate again
         is_SetFrameRate(camera_handle, IS_GET_FRAMERATE, (void *) &actual_fps);
@@ -1083,6 +1086,15 @@ int doCameraAndAstrometry() {
     if (all_camera_params.begin_auto_focus && all_camera_params.focus_mode) {
         num_focus_pos = 0;
 
+        // check that our blob magnitude array is big enough for number of
+        // photos we take per auto-focusing position
+        if (all_camera_params.photos_per_focus != default_focus_photos) {
+            printf("Reallocating blob_mags array to allow for different # of "
+                   "auto-focusing pictures.\n");
+            default_focus_photos = all_camera_params.photos_per_focus;
+            blob_mags = realloc(blob_mags, sizeof(int) * default_focus_photos);
+        }
+
         // get to beginning of auto-focusing range
         if (beginAutoFocus() < 1) {
             printf("Error beginning auto-focusing process. Skipping to taking "
@@ -1099,6 +1111,11 @@ int doCameraAndAstrometry() {
             all_camera_params.focus_mode = 0;
         } 
 
+        if (af_file != NULL) {
+            fclose(af_file);
+            af_file = NULL;
+        }
+
         // clear previous contents of auto-focusing file (open in write mode)
         if ((af_file = fopen(AUTO_FOCUSING, "w")) == NULL) {
     	    fprintf(stderr, "Could not open auto-focusing file: %s.\n", 
@@ -1110,65 +1127,60 @@ int doCameraAndAstrometry() {
     }
 
     // take an image
-    if (!skip_image) {
-        printf("\nTaking a new image...\n");
-        if (is_FreezeVideo(camera_handle, IS_WAIT) != IS_SUCCESS) {
-            const char * last_error_str = printCameraError();
-            printf("Failed to capture new image: %s\n", last_error_str);
-        } 
+    printf("\nTaking a new image...\n");
+    if (is_FreezeVideo(camera_handle, IS_WAIT) != IS_SUCCESS) {
+        const char * last_error_str = printCameraError();
+        printf("Failed to capture new image: %s\n", last_error_str);
+    } 
 
-        // name new image file with time
-        strftime(date, sizeof(date), "/home/xscblast/Desktop/blastcam/BMPs/saved_image_%Y-%m-%d_%H:%M:%S.bmp", tm_info);
-        swprintf(filename, 200, L"%s", date);
+    // name new image file with time
+    strftime(date, sizeof(date), "/home/xscblast/Desktop/blastcam/BMPs/saved_image_%Y-%m-%d_%H:%M:%S.bmp", tm_info);
+    swprintf(filename, 200, L"%s", date);
 
-        // get the image from memory
-        if (is_GetActSeqBuf(camera_handle, &buffer_num, &waiting_mem, &memory) 
-            != IS_SUCCESS) {
-            fprintf(stderr, "Error retrieving the active image memory: %s.\n", 
-                    strerror(errno));
-        }
+    // get the image from memory
+    if (is_GetActSeqBuf(camera_handle, &buffer_num, &waiting_mem, &memory) 
+        != IS_SUCCESS) {
+        fprintf(stderr, "Error retrieving the active image memory: %s.\n", 
+                strerror(errno));
+    }
 
-        // testing pictures that have already been taken 
-        // if (loadDummyPicture(L"/home/xscblast/Desktop/blastcam/BMPs/saved_image_2020-06-13_03:10:34.bmp", &memory) == 1) {
-        //     printf("Successfully loaded test picture.\n");
-        // } else {
-        //     fprintf(stderr, "Error loading test picture: %s.\n", strerror(errno));
-        //     // can't solve without a picture to solve on!
-        //     usleep(1000000);
-        //     return -1;
-        // }
+    // testing pictures that have already been taken 
+    // if (loadDummyPicture(L"/home/xscblast/Desktop/blastcam/BMPs/saved_image_2020-06-13_03:10:34.bmp", &memory) == 1) {
+    //     printf("Successfully loaded test picture.\n");
+    // } else {
+    //     fprintf(stderr, "Error loading test picture: %s.\n", strerror(errno));
+    //     // can't solve without a picture to solve on!
+    //     usleep(1000000);
+    //     return -1;
+    // }
 
-        // find the blobs in the image
-        blob_count = findBlobs(memory, CAMERA_WIDTH, CAMERA_HEIGHT, &star_x, 
-                               &star_y, &star_mags, output_buffer);
+    // find the blobs in the image
+    blob_count = findBlobs(memory, CAMERA_WIDTH, CAMERA_HEIGHT, &star_x, 
+                           &star_y, &star_mags, output_buffer);
 
-        // make kst display the filtered image 
-        memcpy(memory, output_buffer, CAMERA_WIDTH*CAMERA_HEIGHT); 
+    // make kst display the filtered image 
+    memcpy(memory, output_buffer, CAMERA_WIDTH*CAMERA_HEIGHT); 
 
-        // pointer for transmitting to user should point to where image is in memory
-        camera_raw = output_buffer;
 
-        // save image for future reference
-        ImageFileParams.pwchFileName = filename;
-        if (is_ImageFile(camera_handle, IS_IMAGE_FILE_CMD_SAVE, 
-                        (void *) &ImageFileParams, sizeof(ImageFileParams)) == -1) {
-            const char * last_error_str = printCameraError();
-            printf("Failed to save image: %s\n", last_error_str);
-        }
+    // pointer for transmitting to user should point to where image is in memory
+    camera_raw = output_buffer;
+    // save image for future reference
+    ImageFileParams.pwchFileName = filename;
+    if (is_ImageFile(camera_handle, IS_IMAGE_FILE_CMD_SAVE, 
+                    (void *) &ImageFileParams, sizeof(ImageFileParams)) == -1) {
+        const char * last_error_str = printCameraError();
+        printf("Failed to save image: %s\n", last_error_str);
+    }
 
-        wprintf(L"Saving to \"%s\"\n", filename);
-        // unlink whatever the latest saved image was linked to before
-        unlink("/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
-        // sym link current date to latest image for live Kst updates
-        symlink(date, "/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
+    wprintf(L"Saving to \"%s\"\n", filename);
+    // unlink whatever the latest saved image was linked to before
+    unlink("/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
+    // sym link current date to latest image for live Kst updates
+    symlink(date, "/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
 
-        // make a table of blobs for Kst
-        if (makeTable("makeTable.txt", star_mags, star_x, star_y, blob_count) != 1) {
-            printf("Error (above) writing blob table for Kst.\n");
-        }
-    } else {
-        printf("Processing batch of auto-focusing images at focus %d -> do not "
-               "take an image.\n", all_camera_params.focus_position);
+    // make a table of blobs for Kst
+    if (makeTable("makeTable.txt", star_mags, star_x, star_y, blob_count) != 1) {
+        printf("Error (above) writing blob table for Kst.\n");
     }
 
     // get current time right after exposure
@@ -1182,8 +1194,7 @@ int doCameraAndAstrometry() {
 
     // now have to distinguish between auto-focusing actions and solving
     if (all_camera_params.focus_mode) {
-        int max_flux;
-        int focus_step;
+        int brightest_blob, max_flux, focus_step;
         char focus_str_cmd[10];
 
         printf("\n~~~~~~~~~~~~~~~~~ Still in auto-focusing mode in "
@@ -1191,33 +1202,21 @@ int doCameraAndAstrometry() {
         strftime(date, sizeof(date), "/home/xscblast/Desktop/blastcam/BMPs/auto_focus_image_%Y-%m-%d_%H:%M:%S", tm_info);
         swprintf(filename, 200, L"%s", date);
 
-        // if we still have more auto-focus images to take for this position
-        if (af_photo <= all_camera_params.photos_per_focus) {
-            int brightest_blob; 
-
-            // find the brightest blob per picture
-            brightest_blob = -1;
-            for (int blob = 0; blob < blob_count; blob++) {
-                if (star_mags[blob] > brightest_blob) {
-                    brightest_blob = star_mags[blob];
-                }
+        // find the brightest blob per picture
+        brightest_blob = -1;
+        for (int blob = 0; blob < blob_count; blob++) {
+            if (star_mags[blob] > brightest_blob) {
+                brightest_blob = star_mags[blob];
             }
-            blob_mags[af_photo - 1] = brightest_blob;
+        }
+        blob_mags[af_photo - 1] = brightest_blob;
+        printf("Brightest blob for photo %d at focus %d has value %d.\n", 
+               af_photo, all_camera_params.focus_position, brightest_blob);
 
-            // if we are on the very last image for this focus, we do not want
-            // to take another picture on the next round when we are finding
-            // the maximum flux of the previous images
-            if (af_photo == all_camera_params.photos_per_focus) {
-                skip_image = 1;
-            }
+        if (af_photo >= all_camera_params.photos_per_focus) {
+            printf("Processing batch of auto-focusing images at focus %d -> do "
+                   "not take an image.\n", all_camera_params.focus_position);
 
-            printf("Brightest blob for photo %d at focus %d has value %d.\n", 
-                   af_photo, all_camera_params.focus_position, brightest_blob);
-        } else {
-            printf("Finding brightest blob among %d photos for focus %d...\n", 
-                    all_camera_params.photos_per_focus, 
-                    all_camera_params.focus_position);
-            
             // find brightest of three brightest blobs for this batch of images
             max_flux = -1;
             for (int i = 0; i < all_camera_params.photos_per_focus; i++) {
@@ -1225,12 +1224,15 @@ int doCameraAndAstrometry() {
                     max_flux = blob_mags[i];
                 }
             }
-
+            printf("Brighest blob among %d photos for focus %d is %d.\n", 
+                   all_camera_params.photos_per_focus, 
+                   all_camera_params.focus_position,
+                   max_flux);
             // remove this when no longer testing
             max_flux = -(all_camera_params.focus_position*all_camera_params.focus_position) + 
                         (2*all_camera_params.focus_position);
             
-            fprintf(af_file, "%3d\t%5d\n", max_flux, 
+            fprintf(af_file, "%3d\t%5d\n", max_flux,
                     all_camera_params.focus_position);
             fflush(af_file);
 
@@ -1270,6 +1272,7 @@ int doCameraAndAstrometry() {
                 }
 
                 fclose(af_file);
+                af_file = NULL;
             }
         }
     } else {
