@@ -1,17 +1,17 @@
 #ifndef CAMERA_H
 #define CAMERA_H
 
-#define CAMERA_WIDTH   1936 	   // [px]
+#define CAMERA_WIDTH   1936 	 // [px]
 #define CAMERA_HEIGHT  1216	     // [px]
-#define CAMERA_MARGIN  0		     // [px]
+#define CAMERA_MARGIN  0		 // [px]
 #define MIN_PS         6.0       // [arcsec/px]
-#define MAX_PS         6.5		   // [arcsec/px]
+#define MAX_PS         6.5		 // [arcsec/px]
 #define STATIC_HP_MASK "/home/xscblast/Desktop/blastcam/static_hp_mask.txt"
-#define AUTO_FOCUSING  "/home/xscblast/Desktop/blastcam/auto-focus.txt"
 #define dut1           -0.23
 
 extern HIDS camera_handle;
 extern int shutting_down;
+extern int send_data;
 
 // global structure for blob parameters
 #pragma pack(push, 1)

@@ -80,14 +80,15 @@ struct camera_params all_camera_params = {
     .current_aperture = 0,     // current aperture position
     .min_focus_pos = 0,        // current min focus position
     .max_focus_pos = 0,        // current max focus position
-    .exposure_time = 800,      // current exposure time (700 msec is default)
+    .exposure_time = 700,      // current exposure time (800 msec is default)
     .change_exposure_bool = 0, // does user want to change exposure
     .begin_auto_focus = 1,     // auto-focus at beginning of camera's run
     .focus_mode = 1,           // camera begins in auto-focusing mode by default
     .start_focus_pos = 0,      // starting focus for auto-focusing search
     .end_focus_pos = 0,        // ending focus position also set below
-    .focus_step = 10,          // by default, check every fifth focus position
+    .focus_step = 40,          // by default, check every fifth focus position
     .photos_per_focus = 3,     // take 3 pictures per focus position by default
+    .flux = 0,                 // first auto-focus max flux found will set this
 };
 
 char * birger_output, * buffer;
@@ -145,21 +146,47 @@ int quadRegression(int * flux_arr, int * focus_arr, int len) {
     // vector to hold solution values (gaussianElimination will populate this)
     double solution[M]= {0};
 
-    // calculate the quantities for the normal equations
+    // find flux threshold
+    double max_flux = -INFINITY;
     for (int i = 0; i < len; i++) {
-        sumfocus += focus_arr[i];
-        sumflux += flux_arr[i];
-        sumfocus2 += focus_arr[i]*focus_arr[i];
-        sumfocus3 += focus_arr[i]*focus_arr[i]*focus_arr[i];
-        sumfocus4 += focus_arr[i]*focus_arr[i]*focus_arr[i]*focus_arr[i];
-        sumfluxfocus += focus_arr[i]*flux_arr[i];
-        sumfocus2flux += (focus_arr[i]*focus_arr[i])*flux_arr[i];
+        if (flux_arr[i] > max_flux) {
+            max_flux = flux_arr[i];
+        }
+    }
+
+    double min_flux = INFINITY; 
+    for (int i = 0; i < len; i++) {
+        if (flux_arr[i] < min_flux) {
+            min_flux = flux_arr[i];
+        }
+    }
+
+    double threshold = (max_flux + min_flux)/2.0;
+    printf("Max flux is %f | min flux is %f\n", max_flux, min_flux);
+    printf("FLUX THRESHOLD is %f\n\n", threshold);
+
+    // calculate the quantities for the normal equations
+    double num_elements = 0.0;
+    for (int i = 0; i < len; i++) {
+        if (flux_arr[i] >= threshold) {
+            printf("Flux and focus above threshold: %d and %d\n", flux_arr[i], 
+                                                                  focus_arr[i]);
+            double f = focus_arr[i];
+            sumfocus += f;
+            sumflux += flux_arr[i];
+            sumfocus2 += f*f;
+            sumfocus3 += f*f*f;
+            sumfocus4 += f*f*f*f;
+            sumfluxfocus += f*flux_arr[i];
+            sumfocus2flux += (f*f)*flux_arr[i];
+            num_elements++;
+        }
     }
 
     // create augmented matrix with this data to be solved
     double augmatrix[M][N] = {{sumfocus4, sumfocus3, sumfocus2, sumfocus2flux},
                               {sumfocus3, sumfocus2, sumfocus,  sumfluxfocus },
-                              {sumfocus2, sumfocus,  len,       sumflux      }};
+                              {sumfocus2, sumfocus,  num_elements, sumflux   }};
     printf("The original auto-focusing system of equations:\n");
     printMatrix(augmatrix);
     
@@ -362,8 +389,10 @@ int defaultFocusPosition() {
     char focus_str_cmd[10];
 
     printf("MOVING TO DEFAULT FOCUS POSITION...\n");
-    printf("Default focus = %d, all_camera_params.focus_position = %d, default focus - focus position = %d\n", 
-           default_focus, all_camera_params.focus_position, default_focus - all_camera_params.focus_position);
+    printf("Default focus = %d, all_camera_params.focus_position = %d, "
+           "default focus - focus position = %d\n",default_focus, 
+           all_camera_params.focus_position, 
+           default_focus - all_camera_params.focus_position);
     sprintf(focus_str_cmd, "mf %i\r", 
             default_focus - all_camera_params.focus_position);
     if (runCommand(focus_str_cmd, file_descriptor, birger_output) == -1) {
@@ -408,7 +437,7 @@ int shiftFocus(char * cmd) {
 ** Input: Number of focus positions stepped through and auto-focusing data file.
 ** Output: A flag indicating successful calculation of the optimal focus or not.
 */
-int calculateOptimalFocus(int num_focus) {
+int calculateOptimalFocus(int num_focus, char * auto_focus_file) {
     int focus = 0, flux = 0, ind = 0;
     FILE * af;
     char * af_line = NULL;
@@ -425,12 +454,12 @@ int calculateOptimalFocus(int num_focus) {
 
     int * focus_x = calloc(num_focus, sizeof(int));
     if (focus_x == NULL) {
-        fprintf(stderr, "Error allocaring array for focus values: %s.\n", 
+        fprintf(stderr, "Error allocating array for focus values: %s.\n", 
                 strerror(errno));
         return -1;
     }
 
-    if ((af = fopen(AUTO_FOCUSING, "r")) == NULL) {
+    if ((af = fopen(auto_focus_file, "r")) == NULL) {
         fprintf(stderr, "Error opening auto-focusing file: %s.\n", 
                 strerror(errno));
         return -1;
@@ -453,6 +482,9 @@ int calculateOptimalFocus(int num_focus) {
         printf("Unable to perform quad regression on auto-focusing data.\n");
         return -1;
     }
+
+    free(flux_y);
+    free(focus_x);
 
     // print the results of this regression
     printf("Best-fit equation for auto-focusing data is: flux = %.3f*x^2 "

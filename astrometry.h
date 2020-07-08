@@ -11,7 +11,7 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags,
 struct astrometry {
     double timelimit;
     double rawtime;
-    // needed for solving altaz
+    // for solving altaz
     double logodds;
     double latitude;
     double longitude;

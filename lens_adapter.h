@@ -5,8 +5,8 @@ int initLensAdapter(char * path);
 int beginAutoFocus();                                               
 int defaultFocusPosition();                                         
 int shiftFocus(char * cmd);                                         
-int calculateOptimalFocus(int num_focus);                          
-int adjustCameraHardware();                                       
+int calculateOptimalFocus(int num_focus, char * auto_focus_file);                
+int adjustCameraHardware();                            
 int runCommand(const char * command, int file, char * return_str);  
 
 // define global structure for camera parameters
@@ -25,13 +25,14 @@ struct camera_params {
     // lens_adapter.c
     double exposure_time;
     double change_exposure_bool;
-    // auto-focusing parameters
+    // auto-focusing parameters & data
     int begin_auto_focus;       // flag to enter auto-focusing
     int focus_mode;             // state of auto-focusing (1 = on, 0 = off)
     int start_focus_pos;        // where to start the auto-focusing process
     int end_focus_pos;          // where to end the auto-focusing process
     int focus_step;             // granularity of auto-focusing checker
     int photos_per_focus;       // number of photos per auto-focusing position
+    int flux;                   // brightness of most recent maximum flux
 };
 #pragma pack(pop)
 

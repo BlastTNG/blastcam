@@ -64,7 +64,7 @@ void * camera_raw = NULL;
 // if 1, then commanding is in use; if 0, then not
 int command_lock = 0;
 // if 0, then camera is not closing, so keep solving astrometry       
-int shutting_down = 0;      
+int shutting_down = 0;
 // return values for terminating the threads
 int astro_thread_ret, client_thread_ret;
 
@@ -263,6 +263,11 @@ void * processClient(void * for_client_thread) {
             // allow other clients to execute commands (unlock)
             command_lock = 0; 
         }
+
+        while (!send_data) {
+            usleep(100000);
+        }
+
         // compile telemetry and transmit back to use
         memcpy(&all_data.astrom, &all_astro_params, 
                 sizeof(all_astro_params));
@@ -280,17 +285,21 @@ void * processClient(void * for_client_thread) {
             break;
         } 
 
-        // send image bytes back to user for image display
         if (send(socket, camera_raw, CAMERA_WIDTH*CAMERA_HEIGHT, 
                  MSG_NOSIGNAL) <= 0) {
             printf("Client dropped the connection.\n");
             break;
         }
 
-        printf("Telemetry and image bytes sent back to user.\n");      
+        printf("Telemetry and image bytes sent back to user.\n"); 
+
     }
     // clean up socket when the connection is done
     close(socket);
+
+    // free(for_client_thread);
+    // client_thread_ret = 1;
+    // pthread_exit(&client_thread_ret);
 }
 
 /* Driver function for Star Camera operation.
@@ -312,7 +321,8 @@ int main() {
     int client_addr_len;             // length of client addresses
     pthread_t client_thread_id;      // thread ID for new clients        
     pthread_t astro_thread_id;       // thread ID for Astrometry thread
-    int * astro_ptr;                 // ptr for returning from Astrometry thread
+    int * astro_ptr = NULL;          // ptr for returning from Astrometry thread
+    int * client_ptr = NULL;         // ptr for returning from client thread
 
     printf("Size of all_data: %lu bytes\n", sizeof(all_data));
     printf("--------------------------------\n");
@@ -388,9 +398,9 @@ int main() {
                                                            &client_addr, 
                                                            &client_addr_len))) {
         // parent process waiting to accept a new connection
-        printf("\n******************************* Server waiting for new "
-               "client connection: *******************************\n");
-        // store length of client socket that has connected (if any)
+        printf("\n****************************** Server waiting for new client "
+               "connection ******************************\n");
+        // store length of client that has connected (if any)
         client_addr_len = sizeof(client_addr);
         if (newsockfd == -1) {
             printf("New client did not connect.\n");
@@ -422,6 +432,7 @@ int main() {
 
     // join threads once the Astrometry thread has closed and terminated
     pthread_join(astro_thread_id, (void **) &(astro_ptr));
+    // pthread_join(client_thread_id, (void **) &(client_ptr));
 
     closeCamera();
 
@@ -432,4 +443,12 @@ int main() {
         printf("Did not return successfully from Astrometry thread.\n");
         return 0;
     }
+
+    // if (*client_ptr == 1) {
+    //     printf("Successfully exited client thread.\n");
+    //     return 1;
+    // } else {
+    //     printf("Did not return successfully from client thread.\n");
+    //     return 0;
+    // }
 }

@@ -32,7 +32,7 @@ int solver_timelimit;
 
 /* Astrometry parameters global structure, accessible from commands.c as well */
 struct astrometry all_astro_params = {
-	.timelimit = 10,
+	.timelimit = 1,
 	.rawtime = 0,
 	.logodds = 1e8,
 	.latitude = backyard_lat,
