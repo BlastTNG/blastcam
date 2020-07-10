@@ -992,14 +992,9 @@ int doCameraAndAstrometry() {
     time_t seconds = time(NULL);
     struct tm * tm_info;
     
-    // static int focus_ind = 0;
-    // for testing auto focus with previous data
-    // static int flux_vals[30] = {688, 700, 704, 704, 704, 700, 756, 784, 803, 911, 1036, 1196, 1460, 1892, 2812, 3684, 4020, 4036, 4776, 3352, 4128, 3868, 3332, 2048, 1396, 1156, 1000, 900, 824, 808	};
-    // static int focus_vals[30] = {658, 663, 668, 673, 678, 683, 688, 693, 698, 703, 708, 713, 718, 723, 728, 733, 738, 743, 748, 753, 758, 763, 768, 773, 778, 783, 788, 793, 798, 803};
-    
     // uncomment line below for testing the values of each field in the global 
     // structure for blob_params
-    // verifyBlobParams();
+    verifyBlobParams();
 
     tm_info = gmtime(&seconds);
     all_astro_params.rawtime = seconds;
@@ -1199,7 +1194,7 @@ int doCameraAndAstrometry() {
     }
 
     // now have to distinguish between auto-focusing actions and solving
-    if (all_camera_params.focus_mode) {
+    if (all_camera_params.focus_mode && !all_camera_params.begin_auto_focus) {
         int brightest_blob, max_flux, focus_step;
         int brightest_blob_x, brightest_blob_y;
         char focus_str_cmd[10];
@@ -1239,14 +1234,6 @@ int doCameraAndAstrometry() {
                     max_flux = blob_mags[i];
                 }
             }
-            // remove this when no longer testing
-            max_flux = -(all_camera_params.focus_position*all_camera_params.focus_position) + 
-                        (2*all_camera_params.focus_position);
-            // double sigma = 15.0;
-            // max_flux = (1/(0.05*sqrt(2*M_PI)))*exp((-pow(all_camera_params.focus_position + 100, 2))/(2*sigma*sigma));
-
-            // max_flux = flux_vals[focus_ind];
-            // all_camera_params.focus_position = focus_vals[focus_ind];
             all_camera_params.flux = max_flux;
             printf("Brighest blob among %d photos for focus %d is %d.\n", 
                    all_camera_params.photos_per_focus, 
@@ -1259,12 +1246,25 @@ int doCameraAndAstrometry() {
 
             send_data = 1;
 
+            // if clients are listening and we want to guarantee data is sent to
+            // them before continuing with auto-focusing, wait until data_sent
+            // confirmation. If there are no clients, no need to slow down auto-
+            // focusing
+            if (num_clients > 0) {
+                while (!telemetry_sent) {
+                    printf("Waiting for data to send to client...\n");
+                    usleep(100000);
+                }
+            }
+
             focus_step = min(all_camera_params.focus_step, 
                              all_camera_params.end_focus_pos - 
                              all_camera_params.focus_position);
             sprintf(focus_str_cmd, "mf %i\r", focus_step);
-            shiftFocus(focus_str_cmd);
-            usleep(100000);
+            if (!cancelling_auto_focus) {
+                shiftFocus(focus_str_cmd);
+                usleep(100000);
+            }
             num_focus_pos++;
 
             send_data = 0;
@@ -1275,9 +1275,6 @@ int doCameraAndAstrometry() {
             for (int i = 0; i < all_camera_params.photos_per_focus; i++) {
                 blob_mags[i] = 0;
             }
-            
-            // focus_ind++;
-            // if (focus_ind == 30) {
 
             // if we had to step by less than user-specified step, that means we
             // are now at the end focus position
@@ -1370,18 +1367,18 @@ int doCameraAndAstrometry() {
     }
 
     // save image for future reference
-    // ImageFileParams.pwchFileName = filename;
-    // if (is_ImageFile(camera_handle, IS_IMAGE_FILE_CMD_SAVE, 
-    //                 (void *) &ImageFileParams, sizeof(ImageFileParams)) == -1) {
-    //     const char * last_error_str = printCameraError();
-    //     printf("Failed to save image: %s\n", last_error_str);
-    // }
+    ImageFileParams.pwchFileName = filename;
+    if (is_ImageFile(camera_handle, IS_IMAGE_FILE_CMD_SAVE, 
+                    (void *) &ImageFileParams, sizeof(ImageFileParams)) == -1) {
+        const char * last_error_str = printCameraError();
+        printf("Failed to save image: %s\n", last_error_str);
+    }
 
-    // wprintf(L"Saving to \"%s\"\n", filename);
-    // // unlink whatever the latest saved image was linked to before
-    // unlink("/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
-    // // sym link current date to latest image for live Kst updates
-    // symlink(date, "/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
+    wprintf(L"Saving to \"%s\"\n", filename);
+    // unlink whatever the latest saved image was linked to before
+    unlink("/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
+    // sym link current date to latest image for live Kst updates
+    symlink(date, "/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
 
     // make a table of blobs for Kst
     if (makeTable("makeTable.txt", star_mags, star_x, star_y, blob_count) != 1) {

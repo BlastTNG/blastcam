@@ -60,6 +60,10 @@ struct args {
 
 struct commands all_cmds = {0};
 struct telemetry all_data = {0};
+int num_clients = 0;
+int telemetry_sent = 0;
+// flag for cancelling auto-focus mid-process
+int cancelling_auto_focus = 0;
 void * camera_raw = NULL;
 // if 1, then commanding is in use; if 0, then not
 int command_lock = 0;
@@ -105,7 +109,7 @@ void verifyUserCommands() {
 ** Output: None (void). Prints the telemetry sent to the user to the terminal.
 */
 void verifyTelemetryData() {
-    printf("\n**** TELEMETRY ****\n");
+    printf("\n**** TELEMETRY SENT TO USER ****\n");
     printf("Current rawtime: %f\n", all_data.astrom.rawtime);
     printf("RA: %.15f\n", all_data.astrom.ra);
     printf("DEC: %.15f\n", all_data.astrom.dec);
@@ -118,7 +122,7 @@ void verifyTelemetryData() {
     printf("Latitude: %.15f\n", all_data.astrom.latitude);
     printf("Longitude: %.15f\n", all_data.astrom.longitude);
     printf("Height: %f\n", all_data.astrom.hm);
-    printf("***********************\n\n");
+    printf("***********************\n");
 }
 
 /* Function devoted to taking pictures and solving astrometry while camera is 
@@ -176,17 +180,6 @@ void * processClient(void * for_client_thread) {
             printf("User %s sent commands. Executing...\n", ip_addr);
             verifyUserCommands();
 
-            // performing auto-focusing will restrict some of the other cmds, so
-            // check that first
-            if (all_cmds.focus_mode) {
-                all_camera_params.begin_auto_focus = 1;
-            }
-            all_camera_params.focus_mode = all_cmds.focus_mode;
-            all_camera_params.start_focus_pos = all_cmds.start_focus_pos;
-            all_camera_params.end_focus_pos = all_cmds.end_focus_pos;
-            all_camera_params.focus_step = all_cmds.focus_step;
-            all_camera_params.photos_per_focus = all_cmds.photos_per_focus;
-
             // some constants for solving Astrometry
             all_astro_params.logodds = all_cmds.logodds;
             all_astro_params.latitude = all_cmds.latitude;
@@ -228,7 +221,29 @@ void * processClient(void * for_client_thread) {
                 all_blob_params.unique_star_spacing = all_cmds.blob_params[8];
             } 
 
-            if (!all_camera_params.focus_mode) {
+            if (!all_cmds.focus_mode && all_camera_params.focus_mode) {
+                printf("CANCELLING AUTO-FOCUS PROCESS!\n");
+                cancelling_auto_focus = 1;
+            } else {
+                printf("ZEROING AUTO-FOCUS CANCELLATION FLAG\n");
+                // need to reset cancellation flag to 0 if we are not auto-
+                // focusing at all, we are remaining in auto-focusing, or we are
+                // entering auto-focusing
+                cancelling_auto_focus = 0;
+            }
+
+            // performing auto-focusing will restrict some of the other cmds, so
+            // check that before other lens commands & hardware adjustments
+            if (all_cmds.focus_mode) {
+                all_camera_params.begin_auto_focus = 1;
+            }
+            all_camera_params.focus_mode = all_cmds.focus_mode;
+            all_camera_params.start_focus_pos = all_cmds.start_focus_pos;
+            all_camera_params.end_focus_pos = all_cmds.end_focus_pos;
+            all_camera_params.focus_step = all_cmds.focus_step;
+            all_camera_params.photos_per_focus = all_cmds.photos_per_focus;
+
+            if (!all_camera_params.focus_mode && !cancelling_auto_focus) {
                 // if user adjusted exposure, set exposure to their value
                 if (ceil(all_cmds.exposure) != 
                     ceil(all_camera_params.exposure_time)) {
@@ -256,13 +271,15 @@ void * processClient(void * for_client_thread) {
                     printf("Error executing at least one user command.\n");
                 }
             } else {
-                printf("In or entering auto-focusing mode, so ignoring lens "
+                printf("In or entering auto-focusing mode, or cancelling "
+                       "current auto-focus process, so ignore lens " 
                        "commands.\n");
             }
 
             // allow other clients to execute commands (unlock)
             command_lock = 0; 
         }
+        telemetry_sent = 0;
 
         while (!send_data) {
             usleep(100000);
@@ -277,7 +294,6 @@ void * processClient(void * for_client_thread) {
                 sizeof(all_blob_params));
 
         printf("Size of all_data: %lu bytes\n", sizeof(all_data));
-        verifyTelemetryData();
 
         if (send(socket, &all_data, sizeof(struct telemetry), 
                  MSG_NOSIGNAL) <= 0) {
@@ -291,11 +307,17 @@ void * processClient(void * for_client_thread) {
             break;
         }
 
+        telemetry_sent = 1;
         printf("Telemetry and image bytes sent back to user.\n"); 
-
+        verifyTelemetryData();
     }
     // clean up socket when the connection is done
     close(socket);
+    num_clients--;
+
+    // in case user exits in middle of two send() calls above, we don't want to
+    // wait forever in auto-focusing
+    telemetry_sent = 1;
 
     // free(for_client_thread);
     // client_thread_ret = 1;
@@ -398,8 +420,9 @@ int main() {
                                                            &client_addr, 
                                                            &client_addr_len))) {
         // parent process waiting to accept a new connection
-        printf("\n****************************** Server waiting for new client "
-               "connection ******************************\n");
+        printf("\n*************************** Server waiting for new client "
+               "connection, %d connected already ***************************\n", 
+               num_clients);
         // store length of client that has connected (if any)
         client_addr_len = sizeof(client_addr);
         if (newsockfd == -1) {
@@ -427,6 +450,8 @@ int main() {
                 fprintf(stderr, "Error creating thread for new client: %s.\n", 
                         strerror(errno));
             }
+
+            num_clients++;
         }
     }
 

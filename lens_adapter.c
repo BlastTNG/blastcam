@@ -86,7 +86,7 @@ struct camera_params all_camera_params = {
     .focus_mode = 1,           // camera begins in auto-focusing mode by default
     .start_focus_pos = 0,      // starting focus for auto-focusing search
     .end_focus_pos = 0,        // ending focus position also set below
-    .focus_step = 40,          // by default, check every fifth focus position
+    .focus_step = 5,           // by default, check every fifth focus position
     .photos_per_focus = 3,     // take 3 pictures per focus position by default
     .flux = 0,                 // first auto-focus max flux found will set this
 };
