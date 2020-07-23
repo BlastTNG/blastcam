@@ -217,7 +217,7 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned
 		// calculate parallactic angle and add it to field rotation to get image
 		// rotation
 		ir = (iauHd2pa(hob, dob, 
-		               all_astro_params.latitude*(M_PI/180.0)))*(180.0/M_PI) + fr;
+		               all_astro_params.latitude*(M_PI/180.0)))*(180.0/M_PI) - fr;
 
 		// end timer
 		if (clock_gettime(CLOCK_REALTIME, &astrom_tp_end) == -1) {
@@ -236,10 +236,11 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned
 		printf("\n****************************************** TELEMETRY ********"
 		       "**********************************\n");
 		printf("Num blobs: %i | Obs. RA %lf | Obs. DEC %lf | FR %f | PS %lf | "
-		       "ALT %.15f | AZ %.15f | IR %lf\n", num_blobs,
-		        all_astro_params.ra, all_astro_params.dec, all_astro_params.fr, 
-				all_astro_params.ps, all_astro_params.alt, all_astro_params.az, 
-				all_astro_params.ir);
+		       "ALT %.15f | AZ %.15f | IR %lf | Astrom. RA %lf | "
+			   "Astrom. DEC %lf\n", num_blobs, all_astro_params.ra, 
+			    all_astro_params.dec, all_astro_params.fr, all_astro_params.ps, 
+				all_astro_params.alt, all_astro_params.az, all_astro_params.ir, 
+				ra, dec);
 		printf("***************************************************************"
 		       "********************************\n\n");
 

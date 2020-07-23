@@ -1,19 +1,22 @@
 #ifndef CAMERA_H
 #define CAMERA_H
 
+// SO Star Camera is 1936 width by 1216 height; BLAST is 1392 by 1040
 #define CAMERA_WIDTH   1936 	 // [px]
 #define CAMERA_HEIGHT  1216	     // [px]
 #define CAMERA_MARGIN  0		 // [px]
+// pixel scale search range bounds -> 6.0 to 6.5 for SO, 6.0 to 7.0 for BLAST
 #define MIN_PS         6.0       // [arcsec/px]
-#define MAX_PS         6.5		 // [arcsec/px]
+#define MAX_PS         7.0		 // [arcsec/px]
 #define STATIC_HP_MASK "/home/xscblast/Desktop/blastcam/static_hp_mask.txt"
 #define dut1           -0.23
 
 extern HIDS camera_handle;
 extern int shutting_down;
 extern int send_data;
+extern int taking_image;
 
-// global structure for blob parameters
+/* Blob-finding parameters */
 #pragma pack(push, 1)
 struct blob_params {
     int spike_limit;            // where dynamic hot pixel will designate as hp
@@ -30,7 +33,6 @@ struct blob_params {
 };
 #pragma pack(pop)
 
-// make all blob_params acessible from any file that includes camera.h
 extern struct blob_params all_blob_params;
 
 int setCameraParams();

@@ -9,8 +9,8 @@ int calculateOptimalFocus(int num_focus, char * auto_focus_file);
 int adjustCameraHardware();                            
 int runCommand(const char * command, int file, char * return_str);  
 
-// define global structure for camera parameters
 #pragma pack(push, 1)
+/* Camera and lens parameter struct, including auto-focusing */
 struct camera_params {
     // focus and aperture fields
     int prev_focus_pos;
@@ -36,7 +36,6 @@ struct camera_params {
 };
 #pragma pack(pop)
 
-// make all blob_params acessible from any file that includes camera.h
 extern struct camera_params all_camera_params;
 
 #endif 

@@ -6,7 +6,7 @@ void closeAstrometry();
 int lostInSpace(double * star_x, double * star_y, double * star_mags, 
                 unsigned num_blobs, struct tm * tm_info, char * datafile);
 
-// global structure for astrometry parameters
+/* Astrometry parameters and solutions struct */
 #pragma pack(push, 1)
 struct astrometry {
     double timelimit;
@@ -27,7 +27,6 @@ struct astrometry {
 };
 #pragma pack(pop)
 
-// make all blob_params acessible from any file that includes camera.h
 extern struct astrometry all_astro_params;
 
 #endif 

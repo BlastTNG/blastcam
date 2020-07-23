@@ -25,7 +25,7 @@
 ** 		fp: print the raw focus positions
 ** 		la: learn the focus range
 ** 		mf: move focus incremental (mf200 moves the focus by +200, not to +200; 
-                                    mf-200 increments down 200)
+**                                  mf-200 increments down 200)
 ** 		mi: move focus to the infinity stop
 ** 		mz: move focus to the zero stop
 ** 		pf: print focus position
@@ -83,7 +83,7 @@ struct camera_params all_camera_params = {
     .exposure_time = 700,      // current exposure time (800 msec is default)
     .change_exposure_bool = 0, // does user want to change exposure
     .begin_auto_focus = 1,     // auto-focus at beginning of camera's run
-    .focus_mode = 1,           // camera begins in auto-focusing mode by default
+    .focus_mode = 0,           // camera begins in auto-focusing mode by default
     .start_focus_pos = 0,      // starting focus for auto-focusing search
     .end_focus_pos = 0,        // ending focus position also set below
     .focus_step = 5,           // by default, check every fifth focus position
@@ -358,7 +358,7 @@ int initLensAdapter(char * path) {
 int beginAutoFocus() {
     char focus_str_cmd[10];
 
-    printf("BEGINNING THE AUTO-FOCUSING PROCESS...\n");
+    printf("\nBeginning the auto-focus process...\n");
     printf("Auto-focusing parameters: start = %d, stop = %d, step = %d.\n", 
            all_camera_params.start_focus_pos, all_camera_params.end_focus_pos,
            all_camera_params.focus_step);

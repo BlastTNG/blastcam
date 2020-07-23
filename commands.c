@@ -222,10 +222,9 @@ void * processClient(void * for_client_thread) {
             } 
 
             if (!all_cmds.focus_mode && all_camera_params.focus_mode) {
-                printf("CANCELLING AUTO-FOCUS PROCESS!\n");
+                printf("\nCancelling auto-focus process!\n");
                 cancelling_auto_focus = 1;
             } else {
-                printf("ZEROING AUTO-FOCUS CANCELLATION FLAG\n");
                 // need to reset cancellation flag to 0 if we are not auto-
                 // focusing at all, we are remaining in auto-focusing, or we are
                 // entering auto-focusing
@@ -264,6 +263,12 @@ void * processClient(void * for_client_thread) {
                 // update camera params struct with user commands
                 all_camera_params.max_aperture = all_cmds.set_max_aperture;
                 all_camera_params.aperture_steps = all_cmds.aperture_steps;
+
+                // if we are taking an image right now, need to wait to execute
+                // any lens commands
+                while (taking_image) {
+                    usleep(100000);
+                }
 
                 // perform changes to camera settings in lens_adapter.c (focus, 
                 // aperture, and exposure deal with camera hardware)
@@ -320,8 +325,8 @@ void * processClient(void * for_client_thread) {
     telemetry_sent = 1;
 
     // free(for_client_thread);
-    // client_thread_ret = 1;
-    // pthread_exit(&client_thread_ret);
+    client_thread_ret = 1;
+    pthread_exit(&client_thread_ret);
 }
 
 /* Driver function for Star Camera operation.
@@ -367,7 +372,8 @@ int main() {
     // bind the server socket with the server address and port
     if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
         fprintf(stderr, "Error binding Star Camera server socket to Star Camera "
-                        "address and port: %s.\n", 
+                        "address and port: %s. Try again in a few seconds - "
+                        "resources may not be freed if last run just ended.\n", 
                 strerror(errno));
         // the program did not successfully run
         exit(EXIT_FAILURE);
@@ -397,6 +403,7 @@ int main() {
         if (camera_handle > 0) {
             closeCamera();
         }
+        close(sockfd);
         exit(EXIT_FAILURE);
     }
 
@@ -404,6 +411,7 @@ int main() {
     if (initLensAdapter("/dev/ttyLens") < 0) {
         printf("Could not initialize lens adapter due to above error.\n");
         closeCamera();
+        close(sockfd);
         exit(EXIT_FAILURE);
     }
 
@@ -411,6 +419,7 @@ int main() {
     if (pthread_create(&astro_thread_id, NULL, updateAstrometry, NULL) != 0) {
         fprintf(stderr, "Error creating Astrometry thread: %s.\n", 
                 strerror(errno));
+        close(sockfd);
         exit(EXIT_FAILURE);
     }
 
@@ -420,8 +429,8 @@ int main() {
                                                            &client_addr, 
                                                            &client_addr_len))) {
         // parent process waiting to accept a new connection
-        printf("\n*************************** Server waiting for new client "
-               "connection, %d connected already ***************************\n", 
+        printf("\n*************************** Server waiting for new client, "
+               "%d connected already ***************************\n", 
                num_clients);
         // store length of client that has connected (if any)
         client_addr_len = sizeof(client_addr);
@@ -457,9 +466,11 @@ int main() {
 
     // join threads once the Astrometry thread has closed and terminated
     pthread_join(astro_thread_id, (void **) &(astro_ptr));
-    // pthread_join(client_thread_id, (void **) &(client_ptr));
+    pthread_join(client_thread_id, (void **) &(client_ptr));
 
     closeCamera();
+    shutdown(sockfd, SHUT_RDWR);
+    close(sockfd);
 
     if (*astro_ptr == 1) {
         printf("Successfully exited Astrometry.\n");
@@ -469,11 +480,11 @@ int main() {
         return 0;
     }
 
-    // if (*client_ptr == 1) {
-    //     printf("Successfully exited client thread.\n");
-    //     return 1;
-    // } else {
-    //     printf("Did not return successfully from client thread.\n");
-    //     return 0;
-    // }
+    if (*client_ptr == 1) {
+        printf("Successfully exited client thread.\n");
+        return 1;
+    } else {
+        printf("Did not return successfully from client thread.\n");
+        return 0;
+    }
 }
