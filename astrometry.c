@@ -19,6 +19,7 @@
 #include "camera.h"
 #include "astrometry.h"
 #include "lens_adapter.h"
+#include "commands.h"
 
 #define _USE_MATH_DEFINES
 /* Longitude and latitude constants (deg) */
@@ -55,15 +56,24 @@ time_t timeout(void * arg) {
 	int * counter = (int *) arg;
 
 	if (*(counter) != 0) {
-		printf("Have yet to solve Astrometry. Decrementing time counter...\n");
+		if (verbose) {
+			printf("Have yet to solve Astrometry. Decrementing time "
+			       "counter...\n");
+		}
+
 		(*counter)--;
-		printf("Timeout counter is now %d.\n", *counter);
+
+		if (verbose) {
+			printf("Timeout counter is now %d.\n", *counter);
+		}
 	} 
 
 	// if we are shutting down, we don't want to keep trying to solve (we just
 	// want to abort altogether)
 	if (shutting_down) {
-		printf("Shutting down -> zeroing timeout counter.\n");
+		if (verbose) {
+			printf("Shutting down -> zeroing timeout counter.\n");
+		}
 		*counter = 0;
 	}
 
@@ -98,7 +108,9 @@ int initAstrometry() {
 ** Output: None (void).
 */
 void closeAstrometry() {	
-	printf("Closing Astrometry...\n");
+	if (verbose) {
+		printf("Closing Astrometry...\n");
+	}
 	engine_free(engine);
 	solver_free(solver);
 }
@@ -124,7 +136,9 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned
 
 	// reset solver timeout
 	solver_timelimit = (int) all_astro_params.timelimit;
-	printf("Astrometry timeout is %i cycles.\n", *((int *) solver->userdata));
+	if (verbose) {
+		printf("Astrom. timeout is %i cycles.\n", *((int *) solver->userdata));
+	}
 
 	// set up solver configuration
 	solver->funits_lower = MIN_PS;
@@ -253,7 +267,9 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned
 		printf("Astrometry solved in %f msec.\n", astrom_time*1e-6);
 
 		// write astrometry solution to data.txt file
-		printf("Writing Astrometry solution to data file...\n");
+		if (verbose) {
+			printf("Writing Astrometry solution to data file...\n");
+		}
 
     	if ((fptr = fopen(datafile, "a")) == NULL) {
     	    fprintf(stderr, "Could not open observing file: %s.\n", 

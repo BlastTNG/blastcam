@@ -4,6 +4,7 @@
 extern int num_clients;
 extern int telemetry_sent;
 extern int cancelling_auto_focus;
+extern int verbose;
 extern void * camera_raw;
 void * processClient(void * arg);
 

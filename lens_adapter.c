@@ -83,7 +83,7 @@ struct camera_params all_camera_params = {
     .exposure_time = 700,      // current exposure time (800 msec is default)
     .change_exposure_bool = 0, // does user want to change exposure
     .begin_auto_focus = 1,     // auto-focus at beginning of camera's run
-    .focus_mode = 0,           // camera begins in auto-focusing mode by default
+    .focus_mode = 1,           // camera begins in auto-focusing mode by default
     .start_focus_pos = 0,      // starting focus for auto-focusing search
     .end_focus_pos = 0,        // ending focus position also set below
     .focus_step = 5,           // by default, check every fifth focus position
@@ -133,7 +133,9 @@ void printFluxFocus(int * flux_arr, int * focus_arr, int num_elements) {
 ** flux data. 
 */
 int quadRegression(int * flux_arr, int * focus_arr, int len) {
-    printFluxFocus(flux_arr, focus_arr, len);
+    if (verbose) {
+        printFluxFocus(flux_arr, focus_arr, len);
+    }
 
     // summation quantities
     double sumfocus = 0.0;
@@ -162,15 +164,19 @@ int quadRegression(int * flux_arr, int * focus_arr, int len) {
     }
 
     double threshold = (max_flux + min_flux)/2.0;
-    printf("Max flux is %f | min flux is %f\n", max_flux, min_flux);
-    printf("FLUX THRESHOLD is %f\n\n", threshold);
+    if (verbose) {
+        printf("Max flux is %f | min flux is %f\n", max_flux, min_flux);
+        printf("Flux threshold is %f\n\n", threshold);
+    }
 
     // calculate the quantities for the normal equations
     double num_elements = 0.0;
     for (int i = 0; i < len; i++) {
         if (flux_arr[i] >= threshold) {
-            printf("Flux and focus above threshold: %d and %d\n", flux_arr[i], 
-                                                                  focus_arr[i]);
+            if (verbose) {
+                printf("Flux & focus > threshold: %d and %d\n", flux_arr[i], 
+                                                                focus_arr[i]);
+            }
             double f = focus_arr[i];
             sumfocus += f;
             sumflux += flux_arr[i];
@@ -187,8 +193,10 @@ int quadRegression(int * flux_arr, int * focus_arr, int len) {
     double augmatrix[M][N] = {{sumfocus4, sumfocus3, sumfocus2, sumfocus2flux},
                               {sumfocus3, sumfocus2, sumfocus,  sumfluxfocus },
                               {sumfocus2, sumfocus,  num_elements, sumflux   }};
-    printf("The original auto-focusing system of equations:\n");
-    printMatrix(augmatrix);
+    if (verbose) {
+        printf("The original auto-focusing system of equations:\n");
+        printMatrix(augmatrix);
+    }
     
     // perform Gaussian elimination on this matrix
     if (gaussianElimination(augmatrix, solution) < 1) {
@@ -196,10 +204,12 @@ int quadRegression(int * flux_arr, int * focus_arr, int len) {
         return -1;
     }
 
-    printf("\n The upper triangular matrix after Gaussian elimination:\n");
-    printMatrix(augmatrix);
-    printf("\nThe solution vector:");
-    printArray(solution, M);
+    if (verbose) {
+        printf("\n The upper triangular matrix after Gaussian elimination:\n");
+        printMatrix(augmatrix);
+        printf("\nThe solution vector:");
+        printArray(solution, M);
+    }
 
     a = solution[0];
     b = solution[1];
@@ -398,7 +408,7 @@ int defaultFocusPosition() {
     if (runCommand(focus_str_cmd, file_descriptor, birger_output) == -1) {
         printf("Failed to move the focus to the default position.\n");
         return -1;
-    } else {
+    } else if (verbose) {
         printf("Focus moved to default focus - 80 counts below infinity.\n");
     }
 
@@ -469,7 +479,9 @@ int calculateOptimalFocus(int num_focus, char * auto_focus_file) {
     printf("\n");
     while ((af_read = getline(&af_line, &af_len, af)) != -1) {
         sscanf(af_line, "%d\t%d\n", &flux, &focus);
-        printf("Auto-focusing data read in: %3d\t%5d\n", flux, focus);
+        if (verbose) {
+            printf("Auto-focusing data read in: %3d\t%5d\n", flux, focus);
+        }
         flux_y[ind] = flux;
         focus_x[ind] = focus;
         ind++;
@@ -487,8 +499,10 @@ int calculateOptimalFocus(int num_focus, char * auto_focus_file) {
     free(focus_x);
 
     // print the results of this regression
-    printf("Best-fit equation for auto-focusing data is: flux = %.3f*x^2 "
-           "+ %.3f*x + %.3f, where x = focus.\n", a, b, c);
+    if (verbose) {
+        printf("Best-fit equation for auto-focusing data is: flux = %.3f*x^2 "
+               "+ %.3f*x + %.3f, where x = focus.\n", a, b, c);
+    }
 
     // find maximum of this curve and corresponding focus coordinate: 
     // yprime = 2ax + b -> set this to 0 and solve.
@@ -545,7 +559,9 @@ int adjustCameraHardware() {
         // calculate shift needed to get from current focus to user position
         focus_shift = all_camera_params.focus_position - 
                       all_camera_params.prev_focus_pos;
-        printf("Focus change necessary to fulfill user cmd: %i\n", focus_shift);
+        if (verbose) {
+            printf("Focus change to fulfill user cmd: %i\n", focus_shift);
+        }
 
         if (focus_shift != 0) {
             sprintf(focus_str_cmd, "mf %i\r", focus_shift);
@@ -555,7 +571,7 @@ int adjustCameraHardware() {
                 == -1) {
                 printf("Failed to move the focus to the desired position.\n");
                 ret = -1;
-            } else {
+            } else if (verbose) {
                 printf("Focus moved to desired absolute position.\n");
             }
 
@@ -714,19 +730,23 @@ int runCommand(const char * command, int file, char * return_str) {
                &all_camera_params.min_focus_pos, 
                &all_camera_params.max_focus_pos, 
                &all_camera_params.focus_position);
-        printf("in camera params, min focus pos is: %i\n", 
-               all_camera_params.min_focus_pos);
-        printf("in camera params, max focus pos is: %i\n", 
-               all_camera_params.max_focus_pos);
-        printf("in camera params, curr focus pos is: %i\n", 
-               all_camera_params.focus_position);
-        printf("in camera params, prev focus pos was: %i\n", 
-               all_camera_params.prev_focus_pos);
+        if (verbose) {
+            printf("in camera params, min focus pos is: %i\n", 
+                   all_camera_params.min_focus_pos);
+            printf("in camera params, max focus pos is: %i\n", 
+                   all_camera_params.max_focus_pos);
+            printf("in camera params, curr focus pos is: %i\n", 
+                   all_camera_params.focus_position);
+            printf("in camera params, prev focus pos was: %i\n", 
+                   all_camera_params.prev_focus_pos);
+        }
 
         // update previous focus position to current one 
         all_camera_params.prev_focus_pos = all_camera_params.focus_position;
-        printf("in camera params, prev focus pos is now: %i\n", 
-               all_camera_params.prev_focus_pos);
+        if (verbose) {
+            printf("in camera params, prev focus pos is now: %i\n", 
+                   all_camera_params.prev_focus_pos);
+        }
     } else if (strcmp(command, "pa\r") == 0) {
         printf("%s\n", return_str);
 

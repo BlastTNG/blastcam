@@ -4,7 +4,8 @@
 #include <stdlib.h>     
 #include <netinet/in.h>     
 #include <stdio.h>          
-#include <arpa/inet.h>     
+#include <arpa/inet.h>
+#include <ifaddrs.h> 
 #include <netdb.h>         
 #include <errno.h>      
 #include <time.h>  
@@ -55,15 +56,14 @@ struct args {
 };
 #pragma pack(pop)
 
-/* Constants */
-#define PORT  8000
-
 struct commands all_cmds = {0};
 struct telemetry all_data = {0};
 int num_clients = 0;
 int telemetry_sent = 0;
 // flag for cancelling auto-focus mid-process
 int cancelling_auto_focus = 0;
+// assume non-verbose output
+int verbose = 0;
 void * camera_raw = NULL;
 // if 1, then commanding is in use; if 0, then not
 int command_lock = 0;
@@ -178,7 +178,9 @@ void * processClient(void * for_client_thread) {
             // now it's this client's turn to execute commands (lock)
             command_lock = 1;
             printf("User %s sent commands. Executing...\n", ip_addr);
-            verifyUserCommands();
+            if (verbose) {
+                verifyUserCommands();
+            }
 
             // some constants for solving Astrometry
             all_astro_params.logodds = all_cmds.logodds;
@@ -298,8 +300,6 @@ void * processClient(void * for_client_thread) {
         memcpy(&all_data.current_blob_params, &all_blob_params, 
                 sizeof(all_blob_params));
 
-        printf("Size of all_data: %lu bytes\n", sizeof(all_data));
-
         if (send(socket, &all_data, sizeof(struct telemetry), 
                  MSG_NOSIGNAL) <= 0) {
             printf("Client dropped the connection.\n");
@@ -313,8 +313,11 @@ void * processClient(void * for_client_thread) {
         }
 
         telemetry_sent = 1;
-        printf("Telemetry and image bytes sent back to user.\n"); 
-        verifyTelemetryData();
+        
+        if (verbose) {
+            printf("Telemetry and image bytes sent back to user.\n"); 
+            verifyTelemetryData();
+        }
     }
     // clean up socket when the connection is done
     close(socket);
@@ -330,16 +333,19 @@ void * processClient(void * for_client_thread) {
 }
 
 /* Driver function for Star Camera operation.
-** Input: None.
+** Input: Number of command-line arguments passed and an array of those argu-
+** ments.
 ** Output: Flag indicating successful Star Camera operation or an error -> exit.
 */
-int main() {
+int main(int argc, char * argv[]) {
     // signal handling (e.g. ctrl+c exception)
     signal(SIGHUP, clean);
     signal(SIGINT, clean);
     signal(SIGTERM, clean);
     signal(SIGPIPE, SIG_IGN);
 
+    char * lens_desc;                // cmd-line serial port from user
+    int port;                        // port to establish socket on from user
     int sockfd;                      // to create socket
     int newsockfd;                   // to accept new connection
     struct sockaddr_in serv_addr;    // server receives on this address
@@ -348,11 +354,74 @@ int main() {
     int client_addr_len;             // length of client addresses
     pthread_t client_thread_id;      // thread ID for new clients        
     pthread_t astro_thread_id;       // thread ID for Astrometry thread
+    struct args * client_args;       // arguments to pass to clients
     int * astro_ptr = NULL;          // ptr for returning from Astrometry thread
     int * client_ptr = NULL;         // ptr for returning from client thread
+    int any_clients = 0;             // if a client every connected during run
+    int ret;                         // return status of main()
 
-    printf("Size of all_data: %lu bytes\n", sizeof(all_data));
-    printf("--------------------------------\n");
+    // parse command-line arguments
+    if (argc == 2 && strcmp(argv[1], "--help") == 0) {
+        printf("Star Camera command-line program.\n\nSpecify a valid camera "
+               "handle from 1 to 254,\nthe known string descriptor for the "
+               "serial port,\nand the port to establish a socket on. Or:\n\n"
+               "--network: see Star Camera computer's current IP address\n"
+               "for connection via the Star Camera application on "
+               "another\ncomputer.\n\n--number: current number of cameras "
+               "connected to this\ncomputer.\n\n<handle> <serial port> <port> "
+               "--info: run program as usual,\noutputting information for the "
+               "camera as well.\n\n--valid: valid combinations of the above"
+               "input arguments.\n\n<handle> <serial port> <port> -v: for " 
+               "verbose output.\n");
+        return 1;
+    } else if (argc == 2 && strcmp(argv[1], "--network") == 0) {
+        printf("Enter the address is the 'inet addr' field below into\nthe " 
+               "Star Camera application to connect:\n\n");
+        system("/sbin/ifconfig enp3s0");
+        printf("Size of data packet that will be sent to user: %lu bytes\n", 
+               sizeof(all_data));
+        return 1;
+    } else if (argc == 2 && strcmp(argv[1], "--number") == 0) {
+        int num_cams;
+
+        if (is_GetNumberOfCameras(&num_cams) != IS_SUCCESS) {
+            printf("Unable to get number of cameras connected to computer.\n");
+            return 0;
+        } else {
+            printf("Number of cameras connected to Star Camera computer: %d.\n",
+                   num_cams);
+            return 1;
+        }
+    } else if (argc == 2 && strcmp(argv[1], "--valid") == 0) {
+        printf("The valid <handle> <serial port> <socket port> argument "
+               "combinations are:\n");
+        // enter these combinations once known
+        return 1;
+    } else if (argc > 5) {
+        printf("Too many arguments supplied.\n./commands --option, or"
+               "\n./commands <camera handle> <serial port> <socket port>\n");
+        return 0;
+    } else if (argc < 4) {
+        printf("Missing arguments.\n./commands --option, or"
+               "\n./commands <camera handle> <serial port> <socket port>\n");
+        return 0;
+    } else {
+        printf("*** Star Camera command-line interface ***\nCamera handle: "
+               "%s\nSerial Port: %s\nSocket Port: %s\n\n", argv[1], argv[2],
+                                                           argv[3]);
+        camera_handle = atoi(argv[1]);
+        if (camera_handle > 254 || camera_handle < 1) {
+            printf("Invalid camera handle. Choose one in the range 1-254.\n");
+            return 0;
+        }
+
+        lens_desc = argv[2];
+        port = atoi(argv[3]);
+        if (port < 0 || port > 65535) {
+            printf("Invalid port number. Ports must be between 0 and 65535.\n");
+            return 0;
+        }
+    }
 
     // create server socket
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -367,7 +436,7 @@ int main() {
     memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    serv_addr.sin_port = htons(PORT); 
+    serv_addr.sin_port = htons(port); 
 
     // bind the server socket with the server address and port
     if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
@@ -396,9 +465,23 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    // initialize the camera
+    // allow address to be reused (in case of shutdown with client still
+    // connected)
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &(int){1}, 
+                   sizeof(int)) < 0) {
+        fprintf(stderr, "Error setting server reuseaddrr option: %s.\n", 
+                strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    
+    if (argc == 5 && strcmp(argv[4], "-v") == 0) {
+        verbose = 1;
+    }
+
+    // initialize the camera with input ID
     if (initCamera() < 0) {
-        printf("Could not initialize camera due to above error.\n");
+        printf("Could not initialize camera due to above error. Could be that"
+               "you specified a handle for a camera already in use.\n");
         // if camera was already initialized, close it before exiting
         if (camera_handle > 0) {
             closeCamera();
@@ -407,8 +490,27 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
+    if (argc == 5 && strcmp(argv[4], "--info") == 0) {
+        CAMINFO cam_info;
+        if (is_GetCameraInfo(camera_handle, &cam_info) != IS_SUCCESS) {
+            printf("Could not get camera information.\n");
+            closeCamera();
+            exit(EXIT_FAILURE);
+        }
+
+        printf("----------------- Information -----------------\n");
+        printf("Serial number: %s\n", cam_info.SerNo);
+        printf("Camera manufacturer: %s\n", cam_info.ID);
+        printf("Camera version: %s\n", cam_info.Version);
+        printf("System date of final quality check: %s\n", cam_info.Date);
+        printf("Customizable, persistent handle ID\nstored in the camera: %u\n", 
+               cam_info.Select);
+        printf("Camera type: %hhu\n", cam_info.Type);
+        printf("-----------------------------------------------\n");
+    }
+
     // initialize the lens adapter
-    if (initLensAdapter("/dev/ttyLens") < 0) {
+    if (initLensAdapter(lens_desc) < 0) {
         printf("Could not initialize lens adapter due to above error.\n");
         closeCamera();
         close(sockfd);
@@ -437,11 +539,12 @@ int main() {
         if (newsockfd == -1) {
             printf("New client did not connect.\n");
         } else {
+            any_clients = 1;
+
             // user did connect so process their info for their client thread
             printf("Client %s connected.\n", inet_ntoa(client_addr.sin_addr)); 
 
-            struct args * client_args = (struct args *) 
-                                        malloc(sizeof(struct args));
+            client_args = (struct args *) malloc(sizeof(struct args));
             if (client_args == NULL) {
                 fprintf(stderr, "Error creating struct for new client: %s.\n", 
                         strerror(errno));
@@ -463,10 +566,13 @@ int main() {
             num_clients++;
         }
     }
-
+    
     // join threads once the Astrometry thread has closed and terminated
     pthread_join(astro_thread_id, (void **) &(astro_ptr));
-    pthread_join(client_thread_id, (void **) &(client_ptr));
+    if (any_clients) {
+        pthread_join(client_thread_id, (void **) &(client_ptr));
+        free(client_args);
+    }
 
     closeCamera();
     shutdown(sockfd, SHUT_RDWR);
@@ -474,17 +580,21 @@ int main() {
 
     if (*astro_ptr == 1) {
         printf("Successfully exited Astrometry.\n");
-        return 1;
+        ret = 1;
     } else {
         printf("Did not return successfully from Astrometry thread.\n");
-        return 0;
+        ret = 0;
     }
 
-    if (*client_ptr == 1) {
-        printf("Successfully exited client thread.\n");
-        return 1;
-    } else {
-        printf("Did not return successfully from client thread.\n");
-        return 0;
+    if (any_clients) {
+        if (*client_ptr == 1) {
+            printf("Successfully exited client thread.\n");
+            ret = 1;
+        } else {
+            printf("Did not return successfully from client thread.\n");
+            ret = 0;
+        }
     }
+
+    return ret;
 }
