@@ -8,7 +8,7 @@
 // pixel scale search range bounds -> 6.0 to 6.5 for SO, 6.0 to 7.0 for BLAST
 #define MIN_PS         6.0       // [arcsec/px]
 #define MAX_PS         7.0		 // [arcsec/px]
-#define STATIC_HP_MASK "/home/xscblast/Desktop/blastcam/static_hp_mask.txt"
+#define STATIC_HP_MASK "/home/blast/Desktop/blastcam/static_hp_mask.txt"
 #define dut1           -0.23
 
 extern HIDS camera_handle;

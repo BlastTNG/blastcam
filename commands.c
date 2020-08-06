@@ -12,7 +12,8 @@
 #include <math.h>  
 #include <pthread.h>      
 #include <signal.h>         
-#include <ueye.h>           
+#include <ueye.h>
+#include <getopt.h>           
 
 #include "camera.h"
 #include "astrometry.h"
@@ -56,6 +57,19 @@ struct args {
 };
 #pragma pack(pop)
 
+/* Pre-defined struct from getopt.h for additional long options */
+static const struct option long_options[] = {
+    { "valid",     no_argument,       NULL,  3  },
+    { "number",    no_argument,       NULL,  4  },
+    { "network",   no_argument,       NULL,  5  },
+    { "verbose",   no_argument,       NULL, 'v' },
+    { "help",      no_argument,       NULL, 'h' },
+    { "camhandle", required_argument, NULL, 'c' },
+    { "serial",    required_argument, NULL, 's' },
+    { "port",      required_argument, NULL, 'p' },
+    { NULL,        no_argument,       NULL,  0  },
+};
+
 struct commands all_cmds = {0};
 struct telemetry all_data = {0};
 int num_clients = 0;
@@ -72,36 +86,81 @@ int shutting_down = 0;
 // return values for terminating the threads
 int astro_thread_ret, client_thread_ret;
 
+/* Helper function to display the Star Camera terminal header.
+** Input: None.
+** Output: None.
+*/
+void printHeader() {
+    printf("+---------------------------------------------------------+\n");
+    printf("|     \tStar Camera command-line interface     \t\t  |\n");
+    printf("+---------------------------------------------------------+\n");
+}
+
+/* Helper function to display inputs for the command-line interface.
+** Input: None.
+** Output: None.
+*/
+void displayUsage() {
+    printHeader();
+    printf("\nNAME:\n\tStar Camera command-line user interface.\n\nUSAGE:\n\t"
+           "./commands -c [camera handle] -s [lens descriptor for serial "
+           "adapter]\n\t\t   -p [socket port to create server on]\n\n"
+           "DESCRIPTION:\n\tStar Camera command-line user interface. Runs the "
+           "Star Camera to take\n\tpictures and solve for their pointing "
+           "perpetually, while also accepting\n\tuser commands and "
+           "transmitting telemetry. Specify a valid camera handle\n\tfrom 1 "
+           "to 254, the known string descriptor for the serial port, and "
+           "the\n\tport to establish a socket on.\n\nOPTIONS:\n\t-c, "
+           "--camhandle\n\t\tCamera handle for the camera this program will "
+           "control.\n\t\tRequired.\n\n\t-s, --serial\n\t\tLens descriptor. "
+           "Required.\n\n\t-p, --port\n\t\tPort to bind this camera server "
+           "socket to. Required.\n\n\t-v, --verbose\n\t\tIncrease output "
+           "verbosity.\n\n\t--network\n\t\tShow the Star Camera computer IP "
+           "address and the size of the\n\t\ttelemetry package.\n\n\t--number"
+           "\n\t\tSee the current number of cameras connected to the computer."
+           "\n\n\t--valid\n\t\tSee the valid combinations of the necessary "
+           "input argument\n\t\t(handle + lens descriptor + socket port). "
+           "While 0 to 65535 is\n\t\tthe range for valid TCP ports, you should "
+           "specify one of the\n\t\tfollowing three, depending on which "
+           "camera you're using:\n\n\t\t(1)\t8000\n\t\t(2)\t8001\n\t\t(3)"
+           "\t8002\n\n");
+}
+
 /* Helper function for testing reception of user commands.
 ** Input: Nones.
 ** Output: None (void). Prints the most recent user commands to the terminal.
 */
 void verifyUserCommands() {
-    printf("\n**** USER COMMANDS ****\n");
-    printf("Logodds command: %f\n", all_cmds.logodds);
-    printf("Latitude | longitude: %f | %f\n", all_cmds.latitude, 
+    printf("\n+---------------------------------------------------------+\n");
+    printf("| \t\tUser Commands \t\t\t\t  |\n");
+    printf("|---------------------------------------------------------|\n");
+    printf("|\tLogodds command: %f\t\t\t  |\n", all_cmds.logodds);
+    printf("|\tLatitude | longitude: %f | %f\t  |\n", all_cmds.latitude, 
                                               all_cmds.longitude);
-    printf("Exposure command in commands.c: %f\n", all_cmds.exposure);
-    printf("Astrometry timeout: %f\n", all_cmds.timelimit);
-    printf("Focus mode: %s\n", (all_cmds.focus_mode) ? "Auto-focus" : 
-                                                       "Normal focus");
-    printf("Start focus: %i, end focus %i, focus step %i\n", 
+    printf("|\tExposure command in commands.c: %f\t  |\n", all_cmds.exposure);
+    printf("|\tAstrometry timeout: %f\t\t\t  |\n", all_cmds.timelimit);
+    printf("|\tFocus mode: %s\t\t\t  |\n", (all_cmds.focus_mode) ? 
+           "Auto-focus" : "Normal focus");
+    printf("|\tStart focus: %i, end focus: %i, focus step: %i\t  |\n", 
             all_cmds.start_focus_pos, all_cmds.end_focus_pos, 
             all_cmds.focus_step);
-    printf("Photos per focus: %d\n", all_cmds.photos_per_focus);
-    printf("Focus position command: %f\n", all_cmds.focus_pos);
-    printf("Set focus to infinity bool command: %i\n", all_cmds.set_focus_inf);
-    printf("Aperture steps command: %i\n", all_cmds.aperture_steps);
-    printf("Set aperture max bool: %i\n", all_cmds.set_max_aperture);
-    printf("Make static hp mask: %i, use static hp mask: %i\n", 
+    printf("|\tPhotos per focus: %d\t\t\t\t  |\n", all_cmds.photos_per_focus);
+    printf("|\tFocus position command: %f\t\t  |\n", all_cmds.focus_pos);
+    printf("|\tSet focus to infinity bool command: %i\t\t  |\n", 
+           all_cmds.set_focus_inf);
+    printf("|\tAperture steps command: %i\t\t\t  |\n", all_cmds.aperture_steps);
+    printf("|\tSet aperture max bool: %i\t\t\t  |\n", 
+           all_cmds.set_max_aperture);
+    printf("|\tMake static hp mask: %i, use static hp mask: %i\t  |\n", 
             all_cmds.make_hp, all_cmds.use_hp);
-    printf("Blob parameters: %f, %f, %f, %f, %f, %f, %f, %f, %f\n", 
+    printf("|\tBlob parameters: %f, %f, %f\t  |\n|\t\t\t %f, %f, "
+           "%f\t  |\n|\t\t\t %f, %f, %f\t  |\n", 
             all_cmds.blob_params[0], all_cmds.blob_params[1], 
             all_cmds.blob_params[2], all_cmds.blob_params[3], 
             all_cmds.blob_params[4], all_cmds.blob_params[5],
             all_cmds.blob_params[6], all_cmds.blob_params[7], 
             all_cmds.blob_params[8]);
-    printf("***********************\n\n");
+    printf("+---------------------------------------------------------+\n\n");
 }
 
 /* Helper function for testing transmission of telemetry.
@@ -109,20 +168,22 @@ void verifyUserCommands() {
 ** Output: None (void). Prints the telemetry sent to the user to the terminal.
 */
 void verifyTelemetryData() {
-    printf("\n**** TELEMETRY SENT TO USER ****\n");
-    printf("Current rawtime: %f\n", all_data.astrom.rawtime);
-    printf("RA: %.15f\n", all_data.astrom.ra);
-    printf("DEC: %.15f\n", all_data.astrom.dec);
-    printf("FR: %.15f\n", all_data.astrom.fr);
-    printf("AZ: %.15f\n", all_data.astrom.az);
-    printf("ALT: %.15f\n", all_data.astrom.alt);
-    printf("IR: %.15f\n", all_data.astrom.ir);
-    printf("PS: %f\n", all_data.astrom.ps);
-    printf("Logodds: %f\n", all_data.astrom.logodds);
-    printf("Latitude: %.15f\n", all_data.astrom.latitude);
-    printf("Longitude: %.15f\n", all_data.astrom.longitude);
-    printf("Height: %f\n", all_data.astrom.hm);
-    printf("***********************\n");
+    printf("\n+---------------------------------------------------------+\n");
+    printf("|\t\tTelemetry for User\t\t\t  |\n");
+    printf("|---------------------------------------------------------|\n");
+    printf("|\tCurrent rawtime: %f\t\t\t  |\n", all_data.astrom.rawtime);
+    printf("|\tRA: %.15f\t\t\t\t  |\n", all_data.astrom.ra);
+    printf("|\tDEC: %.15f\t\t\t\t  |\n", all_data.astrom.dec);
+    printf("|\tFR: %.15f\t\t\t\t  |\n", all_data.astrom.fr);
+    printf("|\tAZ: %.15f\t\t\t\t  |\n", all_data.astrom.az);
+    printf("|\tALT: %.15f\t\t\t\t  |\n", all_data.astrom.alt);
+    printf("|\tIR: %.15f\t\t\t\t  |\n", all_data.astrom.ir);
+    printf("|\tPS: %f\t\t\t\t\t  |\n", all_data.astrom.ps);
+    printf("|\tLogodds: %f\t\t\t\t  |\n", all_data.astrom.logodds);
+    printf("|\tLatitude: %.15f\t\t\t  |\n", all_data.astrom.latitude);
+    printf("|\tLongitude: %.15f\t\t\t  |\n", all_data.astrom.longitude);
+    printf("|\tHeight: %f\t\t\t\t  |\n", all_data.astrom.hm);
+    printf("+---------------------------------------------------------+\n\n");
 }
 
 /* Function devoted to taking pictures and solving astrometry while camera is 
@@ -134,8 +195,8 @@ void * updateAstrometry() {
     // solve astrometry perpetually when the camera is not shutting down
     while (!shutting_down) {
         if (doCameraAndAstrometry() < 1) {
-            printf("Did not solve or timeout of Astrometry properly, or did "
-                   "not auto-focus properly.\n");
+            printf("Did not solve or timeout of Astrometry properly, or did not"
+                   " auto-focus properly.\n");
         }
     }
 
@@ -177,7 +238,7 @@ void * processClient(void * for_client_thread) {
             }
             // now it's this client's turn to execute commands (lock)
             command_lock = 1;
-            printf("User %s sent commands. Executing...\n", ip_addr);
+            printf("> User %s sent commands. Executing...\n", ip_addr);
             if (verbose) {
                 verifyUserCommands();
             }
@@ -224,7 +285,7 @@ void * processClient(void * for_client_thread) {
             } 
 
             if (!all_cmds.focus_mode && all_camera_params.focus_mode) {
-                printf("\nCancelling auto-focus process!\n");
+                printf("\n> Cancelling auto-focus process!\n");
                 cancelling_auto_focus = 1;
             } else {
                 // need to reset cancellation flag to 0 if we are not auto-
@@ -344,10 +405,14 @@ int main(int argc, char * argv[]) {
     signal(SIGTERM, clean);
     signal(SIGPIPE, SIG_IGN);
 
-    char * lens_desc;                // cmd-line serial port from user
-    int port;                        // port to establish socket on from user
+    int opt;                         // parsing command-line options
+    int long_index = 0;              // for tracking which option we're at
+    char * port = NULL;              // port to bind socket to
+    char * lens_desc = NULL;         // file descriptor for Birger lens adapter
+    char * handle = NULL;            // will be passed to camera_handle
+    int test_handle, test_port;      // for testing the values of user input
     int sockfd;                      // to create socket
-    int newsockfd;                   // to accept new connection
+    int newsockfd;                   // to accept new connection(s)
     struct sockaddr_in serv_addr;    // server receives on this address
     struct sockaddr_in client_addr;  // server sends to client on this address
     struct timeval read_timeout;     // timeout options for server socket 
@@ -360,67 +425,124 @@ int main(int argc, char * argv[]) {
     int any_clients = 0;             // if a client every connected during run
     int ret;                         // return status of main()
 
-    // parse command-line arguments
-    if (argc == 2 && strcmp(argv[1], "--help") == 0) {
-        printf("Star Camera command-line program.\n\nSpecify a valid camera "
-               "handle from 1 to 254,\nthe known string descriptor for the "
-               "serial port,\nand the port to establish a socket on. Or:\n\n"
-               "--network: see Star Camera computer's current IP address\n"
-               "for connection via the Star Camera application on "
-               "another\ncomputer.\n\n--number: current number of cameras "
-               "connected to this\ncomputer.\n\n<handle> <serial port> <port> "
-               "--info: run program as usual,\noutputting information for the "
-               "camera as well.\n\n--valid: valid combinations of the above"
-               "input arguments.\n\n<handle> <serial port> <port> -v: for " 
-               "verbose output.\n");
-        return 1;
-    } else if (argc == 2 && strcmp(argv[1], "--network") == 0) {
-        printf("Enter the address is the 'inet addr' field below into\nthe " 
-               "Star Camera application to connect:\n\n");
-        system("/sbin/ifconfig enp3s0");
-        printf("Size of data packet that will be sent to user: %lu bytes\n", 
-               sizeof(all_data));
-        return 1;
-    } else if (argc == 2 && strcmp(argv[1], "--number") == 0) {
-        int num_cams;
+    // parse command-line options
+    while ((opt = getopt_long(argc, argv, ":c:s:p:vh?", long_options, 
+                              &long_index)) != -1) {
+        switch (opt) {
+            // we will check the essential arguments after
+            case 'c':
+                handle = optarg;
+                break;
+            case 's':
+                lens_desc = optarg;
+                break;
+            case 'p':
+                port = optarg;
+                break;
+            case 'v':
+                // turn on verbose output
+                verbose = 1;
+                break;
+            case 'h':
+                displayUsage();
+                return 1;
+            case 3:
+                // display valid handle, serial port, and port combinations
+                printHeader();
+                printf("\nValid <handle> <serial port> <socket port> argument "
+                       "combinations are:\n");
+                printf("(1)\t12\t/dev/ttyLens12port8000\t8000\n");
+                break;
+            case 4:
+                // number of cameras connected to PC
+                printHeader();
+                int num_cams;
 
-        if (is_GetNumberOfCameras(&num_cams) != IS_SUCCESS) {
-            printf("Unable to get number of cameras connected to computer.\n");
-            return 0;
-        } else {
-            printf("Number of cameras connected to Star Camera computer: %d.\n",
-                   num_cams);
-            return 1;
-        }
-    } else if (argc == 2 && strcmp(argv[1], "--valid") == 0) {
-        printf("The valid <handle> <serial port> <socket port> argument "
-               "combinations are:\n");
-        // enter these combinations once known
-        return 1;
-    } else if (argc > 5) {
-        printf("Too many arguments supplied.\n./commands --option, or"
-               "\n./commands <camera handle> <serial port> <socket port>\n");
-        return 0;
-    } else if (argc < 4) {
-        printf("Missing arguments.\n./commands --option, or"
-               "\n./commands <camera handle> <serial port> <socket port>\n");
-        return 0;
-    } else {
-        printf("*** Star Camera command-line interface ***\nCamera handle: "
-               "%s\nSerial Port: %s\nSocket Port: %s\n\n", argv[1], argv[2],
-                                                           argv[3]);
-        camera_handle = atoi(argv[1]);
-        if (camera_handle > 254 || camera_handle < 1) {
-            printf("Invalid camera handle. Choose one in the range 1-254.\n");
-            return 0;
-        }
+                if (is_GetNumberOfCameras(&num_cams) != IS_SUCCESS) {
+                    printf("Cannot get # of cameras connected to computer.\n");
+                    return 0;
+                } 
+                printf("Number of cameras connected to computer: %d.\n",
+                       num_cams);
 
-        lens_desc = argv[2];
-        port = atoi(argv[3]);
-        if (port < 0 || port > 65535) {
-            printf("Invalid port number. Ports must be between 0 and 65535.\n");
-            return 0;
+                break;
+            case 5:
+                // display network infomation
+                printHeader();
+                printf("\nEnter the address in the 'inet addr' field into\nthe " 
+                       "Star Camera application to connect:\n\n");
+                system("/sbin/ifconfig enp4s0");
+                printf("Size of data packet that gets sent to user: "
+                       "%lu bytes\n", sizeof(all_data));
+                break;
+            case ':':
+                // missing arguments (but option itself is given)
+                printHeader();
+                fprintf(stderr, "Option '-%c' requires an argument.\n", optopt);
+                return 0;
+            case '?':
+                printHeader();
+                // invalid arguments
+                fprintf(stderr, "Option '-%c' is invalid.\n", optopt);
+                return 0;
         }
+    }
+
+    // make sure we have all the essential arguments
+    if (handle == NULL) {
+        printHeader();
+        printf("\nMissing camera handle. Run ./commands --help for details.\n");
+        return 0;
+    }
+
+    if (lens_desc == NULL) {
+        printHeader();
+        printf("\nMissing serial port. Run ./commands --help for details.\n");
+        return 0;
+    }
+
+    if (port == NULL) {
+        printHeader();
+        printf("\nMissing socket port. Run ./commands --help for details.\n");
+        return 0;
+    }
+
+    printHeader();
+    printf("|     \tCamera handle: %s     \t\t\t\t  |\n", handle);
+    printf("|     \tSerial Port: %s     \t  |\n", lens_desc);
+    printf("|     \tSocket Port: %s     \t\t\t\t  |\n", port);
+    printf("+---------------------------------------------------------+\n");
+
+    // if the arguments exist, check their values are valid
+    camera_handle = atoi(handle);
+    if (camera_handle > 254 || camera_handle < 1) {
+        printf("Invalid camera handle. Choose one in the range 1-254.\n");
+        return 0;
+    }
+
+    if (atoi(port) > 65535 || atoi(port) < 0) {
+        printf("Invalid TCP socket port. Choose one in the range 0-65535.\n");
+        return 0;
+    }
+
+    // then check that the socket port and camera handle in the serial port are
+    // a valid combination
+    if (sscanf(lens_desc, "/dev/ttyLens%dport%d", &test_handle, &test_port) 
+        < 2) {
+        printf("Invalid lens descriptor. Run ./commands --help for details.\n");
+    }
+
+    // one valid sequence is handle = 12 and port = 8000
+    if (test_port != atoi(port)) {
+        printf("Socket port %s does not match the one listed in the lens"
+               "descriptor: %s.\n", port, lens_desc);
+        return 0;
+    }
+
+    if (test_handle == 12 && atoi(port) != 8000) {
+        printf("Camera handle 12 corresponds to socket port of 8000, not %s.\n", 
+               port);
+        return 0;
     }
 
     // create server socket
@@ -436,12 +558,12 @@ int main(int argc, char * argv[]) {
     memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    serv_addr.sin_port = htons(port); 
+    serv_addr.sin_port = htons(atoi(port)); 
 
     // bind the server socket with the server address and port
     if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
-        fprintf(stderr, "Error binding Star Camera server socket to Star Camera "
-                        "address and port: %s. Try again in a few seconds - "
+        fprintf(stderr, "Error binding Star Camera server socket to Star Camera"
+                        " address and port: %s. Try again in a few seconds - "
                         "resources may not be freed if last run just ended.\n", 
                 strerror(errno));
         // the program did not successfully run
@@ -467,20 +589,16 @@ int main(int argc, char * argv[]) {
 
     // allow address to be reused (in case of shutdown with client still
     // connected)
-    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &(int){1}, 
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, 
                    sizeof(int)) < 0) {
         fprintf(stderr, "Error setting server reuseaddrr option: %s.\n", 
                 strerror(errno));
         exit(EXIT_FAILURE);
     }
-    
-    if (argc == 5 && strcmp(argv[4], "-v") == 0) {
-        verbose = 1;
-    }
 
     // initialize the camera with input ID
     if (initCamera() < 0) {
-        printf("Could not initialize camera due to above error. Could be that"
+        printf("Could not initialize camera due to above error. Could be that "
                "you specified a handle for a camera already in use.\n");
         // if camera was already initialized, close it before exiting
         if (camera_handle > 0) {
@@ -490,31 +608,12 @@ int main(int argc, char * argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    if (argc == 5 && strcmp(argv[4], "--info") == 0) {
-        CAMINFO cam_info;
-        if (is_GetCameraInfo(camera_handle, &cam_info) != IS_SUCCESS) {
-            printf("Could not get camera information.\n");
-            closeCamera();
-            exit(EXIT_FAILURE);
-        }
-
-        printf("----------------- Information -----------------\n");
-        printf("Serial number: %s\n", cam_info.SerNo);
-        printf("Camera manufacturer: %s\n", cam_info.ID);
-        printf("Camera version: %s\n", cam_info.Version);
-        printf("System date of final quality check: %s\n", cam_info.Date);
-        printf("Customizable, persistent handle ID\nstored in the camera: %u\n", 
-               cam_info.Select);
-        printf("Camera type: %hhu\n", cam_info.Type);
-        printf("-----------------------------------------------\n");
-    }
-
     // initialize the lens adapter
     if (initLensAdapter(lens_desc) < 0) {
         printf("Could not initialize lens adapter due to above error.\n");
-        closeCamera();
-        close(sockfd);
-        exit(EXIT_FAILURE);
+        // closeCamera();
+        // close(sockfd);
+        // exit(EXIT_FAILURE);
     }
 
     // create a thread separate from all client thread(s) to solve Astrometry 
@@ -531,9 +630,11 @@ int main(int argc, char * argv[]) {
                                                            &client_addr, 
                                                            &client_addr_len))) {
         // parent process waiting to accept a new connection
-        printf("\n*************************** Server waiting for new client, "
-               "%d connected already ***************************\n", 
-               num_clients);
+        printf("\n+---------------------------------------------------------+\n");
+        printf("| Server waiting for new client, %d already connected\t  |\n",
+           num_clients);
+        printf("+---------------------------------------------------------+\n");
+
         // store length of client that has connected (if any)
         client_addr_len = sizeof(client_addr);
         if (newsockfd == -1) {
@@ -579,19 +680,19 @@ int main(int argc, char * argv[]) {
     close(sockfd);
 
     if (*astro_ptr == 1) {
-        printf("Successfully exited Astrometry.\n");
+        printf("\nSuccessfully exited Astrometry.\n");
         ret = 1;
     } else {
-        printf("Did not return successfully from Astrometry thread.\n");
+        printf("\nDid not return successfully from Astrometry thread.\n");
         ret = 0;
     }
 
     if (any_clients) {
         if (*client_ptr == 1) {
-            printf("Successfully exited client thread.\n");
+            printf("\nSuccessfully exited client thread.\n");
             ret = 1;
         } else {
-            printf("Did not return successfully from client thread.\n");
+            printf("\nDid not return successfully from client thread.\n");
             ret = 0;
         }
     }

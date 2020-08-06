@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <math.h>
+#include <errno.h>
 #include <astrometry/os-features.h>
 #include <astrometry/engine.h>
 #include <astrometry/solver.h>
@@ -13,8 +14,6 @@
 #include <astrometry/fileutils.h>
 #include <ueye.h>
 #include <sofa/sofa.h>
-#include "/home/xscblast/astrometry/blind/solver.c"
-#include "/home/xscblast/astrometry/blind/engine.c"
 
 #include "camera.h"
 #include "astrometry.h"
@@ -57,14 +56,14 @@ time_t timeout(void * arg) {
 
 	if (*(counter) != 0) {
 		if (verbose) {
-			printf("Have yet to solve Astrometry. Decrementing time "
+			printf("> Have yet to solve Astrometry. Decrementing time "
 			       "counter...\n");
 		}
 
 		(*counter)--;
 
 		if (verbose) {
-			printf("Timeout counter is now %d.\n", *counter);
+			printf("(*) Timeout counter is now %d.\n", *counter);
 		}
 	} 
 
@@ -72,7 +71,7 @@ time_t timeout(void * arg) {
 	// want to abort altogether)
 	if (shutting_down) {
 		if (verbose) {
-			printf("Shutting down -> zeroing timeout counter.\n");
+			printf("\n> Shutting down -> zeroing timeout counter.\n");
 		}
 		*counter = 0;
 	}
@@ -88,7 +87,7 @@ time_t timeout(void * arg) {
 int initAstrometry() {
 	engine = engine_new();
 	solver = solver_new();
-	
+
 	if (engine_parse_config_file(engine, 
 	                             "/usr/local/astrometry/etc/astrometry.cfg")) {
 		printf("Bad configuration file in Astrometry constructor.\n");
@@ -109,7 +108,7 @@ int initAstrometry() {
 */
 void closeAstrometry() {	
 	if (verbose) {
-		printf("Closing Astrometry...\n");
+		printf("> Closing Astrometry...\n");
 	}
 	engine_free(engine);
 	solver_free(solver);
@@ -137,7 +136,8 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned
 	// reset solver timeout
 	solver_timelimit = (int) all_astro_params.timelimit;
 	if (verbose) {
-		printf("Astrom. timeout is %i cycles.\n", *((int *) solver->userdata));
+		printf("(*) Astrometry timeout is %i cycles.\n", 
+	           *((int *) solver->userdata));
 	}
 
 	// set up solver configuration
@@ -247,16 +247,21 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned
 		all_astro_params.fr = fr;
 		all_astro_params.ps = ps;
 
-		printf("\n****************************************** TELEMETRY ********"
-		       "**********************************\n");
-		printf("Num blobs: %i | Obs. RA %lf | Obs. DEC %lf | FR %f | PS %lf | "
-		       "ALT %.15f | AZ %.15f | IR %lf | Astrom. RA %lf | "
-			   "Astrom. DEC %lf\n", num_blobs, all_astro_params.ra, 
-			    all_astro_params.dec, all_astro_params.fr, all_astro_params.ps, 
-				all_astro_params.alt, all_astro_params.az, all_astro_params.ir, 
-				ra, dec);
-		printf("***************************************************************"
-		       "********************************\n\n");
+    	printf("\n+---------------------------------------------------------+\n");
+		printf("|\t\tTelemetry\t\t\t\t  |\n");
+		printf("|---------------------------------------------------------|\n");
+		printf("|\tRaw time (sec): %.1f\t\t\t  |\n", all_astro_params.rawtime);
+		printf("|\tNumber of blobs found: %i\t\t\t  |\n", num_blobs);
+		printf("|\tAstrometry RA (deg): %lf\t\t\t  |\n", ra);
+		printf("|\tAstrometry DEC (deg): %lf\t\t\t  |\n", dec);
+		printf("|\tObserved RA (deg): %lf\t\t\t  |\n", all_astro_params.ra);
+		printf("|\tObserved DEC (deg): %lf\t\t\t  |\n", all_astro_params.dec);
+		printf("|\tField rotation (deg): %f\t\t\t  |\n", all_astro_params.fr);
+		printf("|\tImage rotation (deg): %lf\t\t  |\n", all_astro_params.ir);
+		printf("|\tPixel scale (arcsec/px): %lf\t\t  |\n", all_astro_params.ps);
+		printf("|\tAltitude (deg): %.15f\t\t  |\n", all_astro_params.alt);
+		printf("|\tAzimuth (deg): %.15f\t\t  |\n", all_astro_params.az);
+		printf("+---------------------------------------------------------+\n\n");
 
 		// calculate how long solution took to solve in terms of nanoseconds
 		start = (double) (astrom_tp_beginning.tv_sec*1e9) + 
@@ -264,11 +269,11 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned
 		end = (double) (astrom_tp_end.tv_sec*1e9) + 
 		      (double) astrom_tp_end.tv_nsec;
     	astrom_time = end - start;
-		printf("Astrometry solved in %f msec.\n", astrom_time*1e-6);
+		printf("(*) Astrometry solved in %f msec.\n", astrom_time*1e-6);
 
 		// write astrometry solution to data.txt file
 		if (verbose) {
-			printf("Writing Astrometry solution to data file...\n");
+			printf("> Writing Astrometry solution to data file...\n");
 		}
 
     	if ((fptr = fopen(datafile, "a")) == NULL) {

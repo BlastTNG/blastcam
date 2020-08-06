@@ -83,7 +83,7 @@ struct camera_params all_camera_params = {
     .exposure_time = 700,      // current exposure time (800 msec is default)
     .change_exposure_bool = 0, // does user want to change exposure
     .begin_auto_focus = 1,     // auto-focus at beginning of camera's run
-    .focus_mode = 1,           // camera begins in auto-focusing mode by default
+    .focus_mode = 0,           // camera begins in auto-focusing mode by default
     .start_focus_pos = 0,      // starting focus for auto-focusing search
     .end_focus_pos = 0,        // ending focus position also set below
     .focus_step = 5,           // by default, check every fifth focus position
@@ -116,7 +116,7 @@ void printArray(double * arr, int len) {
 ** Output: None (void). Prints the arrays to the terminal for verification.
 */
 void printFluxFocus(int * flux_arr, int * focus_arr, int num_elements) {
-    printf("\nFlux and focus data to compare with auto-focusing file:\n");
+    printf("\n(*) Flux and focus data to compare with auto-focusing file:\n");
 
     for (int i = 0; i < num_elements; i++) {
         printf("%3d\t%6d\n", flux_arr[i], focus_arr[i]);
@@ -165,8 +165,8 @@ int quadRegression(int * flux_arr, int * focus_arr, int len) {
 
     double threshold = (max_flux + min_flux)/2.0;
     if (verbose) {
-        printf("Max flux is %f | min flux is %f\n", max_flux, min_flux);
-        printf("Flux threshold is %f\n\n", threshold);
+        printf("(*) Max flux is %f | min flux is %f\n", max_flux, min_flux);
+        printf("(*) Flux threshold is %f\n\n", threshold);
     }
 
     // calculate the quantities for the normal equations
@@ -194,7 +194,7 @@ int quadRegression(int * flux_arr, int * focus_arr, int len) {
                               {sumfocus3, sumfocus2, sumfocus,  sumfluxfocus },
                               {sumfocus2, sumfocus,  num_elements, sumflux   }};
     if (verbose) {
-        printf("The original auto-focusing system of equations:\n");
+        printf("(*) The original auto-focusing system of equations:\n");
         printMatrix(augmatrix);
     }
     
@@ -205,9 +205,9 @@ int quadRegression(int * flux_arr, int * focus_arr, int len) {
     }
 
     if (verbose) {
-        printf("\n The upper triangular matrix after Gaussian elimination:\n");
+        printf("\n (*) The upper triangular matrix:\n");
         printMatrix(augmatrix);
-        printf("\nThe solution vector:");
+        printf("\n(*) The solution vector:");
         printArray(solution, M);
     }
 
@@ -275,10 +275,13 @@ int initLensAdapter(char * path) {
     // shut off parity
     options.c_cflag &= ~(PARENB | PARODD);
     options.c_cflag &= ~CSTOPB;
-    options.c_cflag &= ~CRTSCTS;  // turns off flow control maybe?
-                                  // http://pubs.opengroup.org/onlinepubs/009695399/basedefs/xbd_chap11.html#tag_11_02_04
-                                  // ^list of possible c_cflag options (doesn't include crtscts)
-                                  // crtscts does not exist in termios.h doc
+
+    // turns off flow control maybe?
+    // http://pubs.opengroup.org/onlinepubs/009695399/basedefs/xbd_chap11.html#tag_11_02_04
+    // ^list of possible c_cflag options (doesn't include crtscts)
+    // crtscts does not exist in termios.h doc
+    options.c_cflag &= ~CRTSCTS;
+
     options.c_iflag |= ICRNL;
     // sets a read timeout of 2 seconds so it doesn't block forever
     options.c_lflag &= ~ICANON;
@@ -328,7 +331,7 @@ int initLensAdapter(char * path) {
         return -1;
     } 
     default_focus = all_camera_params.focus_position;
-    printf("---> Default focus value: %d\n", default_focus);
+    printf("(*) Default focus value: %d\n", default_focus);
 
     // update auto-focusing values now that camera params struct is populated
     all_camera_params.start_focus_pos = all_camera_params.focus_position - 100;
@@ -368,8 +371,8 @@ int initLensAdapter(char * path) {
 int beginAutoFocus() {
     char focus_str_cmd[10];
 
-    printf("\nBeginning the auto-focus process...\n");
-    printf("Auto-focusing parameters: start = %d, stop = %d, step = %d.\n", 
+    printf("\n> Beginning the auto-focus process...\n");
+    printf("(*) Auto-focusing parameters: start = %d, stop = %d, step = %d.\n", 
            all_camera_params.start_focus_pos, all_camera_params.end_focus_pos,
            all_camera_params.focus_step);
     sprintf(focus_str_cmd, "mf %i\r", all_camera_params.start_focus_pos - 
@@ -398,8 +401,8 @@ int beginAutoFocus() {
 int defaultFocusPosition() {
     char focus_str_cmd[10];
 
-    printf("MOVING TO DEFAULT FOCUS POSITION...\n");
-    printf("Default focus = %d, all_camera_params.focus_position = %d, "
+    printf("> Moving to default focus position..\n");
+    printf("(*) Default focus = %d, all_camera_params.focus_position = %d, "
            "default focus - focus position = %d\n",default_focus, 
            all_camera_params.focus_position, 
            default_focus - all_camera_params.focus_position);
@@ -535,8 +538,8 @@ int calculateOptimalFocus(int num_focus, char * auto_focus_file) {
 ** struct with the updated values.
 */
 int adjustCameraHardware() {
-    char focus_str_cmd[10]; 
-    char aper_str_cmd[4]; 
+    char focus_str_cmd[15]; 
+    char aper_str_cmd[15]; 
     double current_exposure;
     int focus_shift;
     int ret = 1;

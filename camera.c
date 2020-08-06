@@ -47,11 +47,11 @@ int prev_dynamic_hp;
 struct blob_params all_blob_params = {
     .spike_limit = 3,             
     .dynamic_hot_pixels = 1,       
-    .r_smooth = 1,                 
+    .r_smooth = 2,                 
     .high_pass_filter = 0,         
     .r_high_pass_filter = 10,     
     .centroid_search_border = 1,  
-    .filter_return_image = 1,      
+    .filter_return_image = 0,      
     .n_sigma = 2.0,               
     .unique_star_spacing = 15,    
     .make_static_hp_mask = 0,     
@@ -79,26 +79,32 @@ int isLeapYear(int year) {
 ** Output: None (void). Prints current blob-finding parameters to the terminal.
 **/
 void verifyBlobParams() {
-    printf("\nall_blob_params.spike_limit is: %d\n", 
+    printf("\n+---------------------------------------------------------+\n");
+    printf("|\t\tBlob-finding parameters\t\t\t  |\n");
+    printf("|---------------------------------------------------------|\n");
+    printf("|\tall_blob_params.spike_limit is: %d\t\t  |\n", 
            all_blob_params.spike_limit);
-    printf("all_blob_params.dynamic_hot_pixels is: %d\n", 
+    printf("|\tall_blob_params.dynamic_hot_pixels is: %d\t  |\n", 
            all_blob_params.dynamic_hot_pixels);
-    printf("all_blob_params.centroid_search_border is: %d\n", 
+    printf("|\tall_blob_params.centroid_search_border is: %d\t  |\n", 
            all_blob_params.centroid_search_border);
-    printf("all_blob_params.high_pass_filter is: %d\n", 
+    printf("|\tall_blob_params.high_pass_filter is: %d\t\t  |\n", 
            all_blob_params.high_pass_filter);
-    printf("all_blob_params.r_smooth is: %d\n", all_blob_params.r_smooth);
-    printf("all_blob_params.filter_return_image is: %d\n", 
+    printf("|\tall_blob_params.r_smooth is: %d\t\t\t  |\n", 
+           all_blob_params.r_smooth);
+    printf("|\tall_blob_params.filter_return_image is: %d\t  |\n", 
            all_blob_params.filter_return_image);
-    printf("all_blob_params.r_high_pass_filter is: %d\n", 
+    printf("|\tall_blob_params.r_high_pass_filter is: %d\t  |\n", 
            all_blob_params.r_high_pass_filter);
-    printf("all_blob_params.n_sigma is: %f\n", all_blob_params.n_sigma);
-    printf("all_blob_params.unique_star_spacing is: %d\n", 
+    printf("|\tall_blob_params.n_sigma is: %.2f\t\t  |\n", 
+           all_blob_params.n_sigma);
+    printf("|\tall_blob_params.unique_star_spacing is: %d\t  |\n", 
            all_blob_params.unique_star_spacing);
-    printf("all_blob_params.make_static_hp_mask is: %i\n", 
+    printf("|\tall_blob_params.make_static_hp_mask is: %i\t  |\n", 
            all_blob_params.make_static_hp_mask);
-    printf("all_blob_params.use_static_hp_mask is: %i\n\n", 
+    printf("|\tall_blob_params.use_static_hp_mask is: %i\t  |\n", 
            all_blob_params.use_static_hp_mask);
+    printf("+---------------------------------------------------------+\n\n");
 }
 
 /* Helper function to print camera errors.
@@ -164,9 +170,10 @@ int initCamera() {
         printf("Unable to get maximum exposure value: %s.\n", cam_error);
         return -1;
     } else if (verbose) {
-        printf("Current exposure time: %f msec | Min possible exposure: %f "
-               "msec | Max possible exposure: %f msec\n\n", 
-               curr_exposure, min_exposure, max_exposure);
+        printf("|\tCurrent exposure time: %f msec\t\t  |\n|\tMin possible "
+               "exposure: %f msec\t\t  |\n|\tMax possible exposure: %f "
+               "msec\t  |\n", curr_exposure, min_exposure, max_exposure);
+        printf("+---------------------------------------------------------+\n");
     }
 
     // initialize astrometry
@@ -186,7 +193,7 @@ int initCamera() {
 **/
 void clean() {
     if (verbose) {
-        printf("\nEntering shutting down state...\n");
+        printf("\n> Entering shutting down state...\n");
     }
     // camera is in shutting down state (stop solving)
     shutting_down = 1;
@@ -198,8 +205,9 @@ void clean() {
 */
 void closeCamera() {
     if (verbose) {
-        printf("Closing camera with handle %d...\n", camera_handle);
+        printf("> Closing camera with handle %d...\n", camera_handle);
     }
+    
     // don't close a camera that doesn't exist yet!
     if ((mem_starting_ptr != NULL) && (camera_handle <= 254)) { 
         is_FreeImageMem(camera_handle, mem_starting_ptr, mem_id);
@@ -224,7 +232,10 @@ int setCameraParams() {
     // check the trigger delay is 0
     curr_trig_delay = is_SetTriggerDelay(camera_handle, IS_GET_TRIGGER_DELAY); 
     if (verbose) {
-        printf("Trigger delay (should be 0): %i\n", curr_trig_delay);
+        printf("\n+---------------------------------------------------------+\n");
+        printf("|\t\tCamera Specifications\t\t\t  |\n");
+        printf("|---------------------------------------------------------|\n");
+        printf("|\tTrigger delay (should be 0): %i\t\t\t  |\n", curr_trig_delay);
     }
 
     // set camera integrated amplifier 
@@ -250,9 +261,8 @@ int setCameraParams() {
                                         IS_IGNORE_PARAMETER, 
                                         IS_IGNORE_PARAMETER, IS_GET_BLUE_GAIN);
     if (verbose) {
-        printf("Gain settings: %i for master gain, %i for red gain, %i for green "
-               "gain, and %i for blue gain.\n", curr_master_gain, curr_red_gain,
-               curr_green_gain, curr_blue_gain);
+        printf("|\tGain: master, red, green, blue = %i, %i, %i, %i |\n", 
+               curr_master_gain, curr_red_gain, curr_green_gain, curr_blue_gain);
     }
 
     // disable camera's auto gain (0 = disabled)
@@ -265,7 +275,7 @@ int setCameraParams() {
     // check auto gain is off
     is_SetAutoParameter(camera_handle, IS_GET_ENABLE_AUTO_GAIN, &curr_ag, NULL);
     if (verbose) {
-        printf("Auto gain (should be disabled): %f\n", curr_ag);
+        printf("|\tAuto gain (should be disabled): %.1f\t\t  |\n", curr_ag);
     }
 
     // set camera's gamma value to off 
@@ -277,7 +287,7 @@ int setCameraParams() {
     // check hardware gamma is off
     curr_gamma = is_SetHardwareGamma(camera_handle, IS_GET_HW_GAMMA);
     if (verbose) {
-        printf("Hardware gamma (should be off): %i\n", curr_gamma);
+        printf("|\tHardware gamma (should be off): %i\t\t  |\n", curr_gamma);
     }
 
     // disable auto shutter
@@ -291,7 +301,7 @@ int setCameraParams() {
     is_SetAutoParameter(camera_handle, IS_GET_ENABLE_AUTO_SHUTTER, 
                         &curr_shutter, NULL);
     if (verbose) {
-        printf("Auto shutter (should be off): %.1f\n", curr_shutter);
+        printf("|\tAuto shutter (should be off): %.1f\t\t  |\n", curr_shutter);
     }
 
     // disable auto frame rate
@@ -305,7 +315,7 @@ int setCameraParams() {
     is_SetAutoParameter(camera_handle, IS_GET_ENABLE_AUTO_FRAMERATE, &auto_fr, 
                         NULL);
     if (verbose) {
-        printf("Auto frame rate (should be off): %.1f\n", auto_fr);
+        printf("|\tAuto frame rate (should be off): %.1f\t\t  |\n", auto_fr);
     }
 
     // disable gain boost to reduce noise
@@ -317,7 +327,8 @@ int setCameraParams() {
     // check gain boost is off
     curr_gain_boost = is_SetGainBoost(camera_handle, IS_GET_GAINBOOST);
     if (verbose) {
-        printf("Gain boost (should be disabled): %i\n", curr_gain_boost);	
+        printf("|\tGain boost (should be disabled): %i\t\t  |\n", 
+               curr_gain_boost);	
     }
 
     // turn off auto black level
@@ -332,7 +343,7 @@ int setCameraParams() {
     bl_mode = is_Blacklevel(camera_handle, IS_BLACKLEVEL_CMD_GET_MODE, 
                             (void *) &bl_mode, sizeof(bl_mode));
     if (verbose) {
-        printf("Auto black level (should be off): %i\n", bl_mode);
+        printf("|\tAuto black level (should be off): %i\t\t  |\n", bl_mode);
     }
 
     // set black level offset to 50
@@ -347,7 +358,7 @@ int setCameraParams() {
     is_Blacklevel(camera_handle, IS_BLACKLEVEL_CMD_GET_OFFSET, 
                   (void *) &bl_offset, sizeof(bl_offset));
     if (verbose) {
-        printf("Black level offset (desired is 50): %i\n", bl_offset);
+        printf("|\tBlack level offset (desired is 50): %i\t\t  |\n", bl_offset);
     }
 
     // This for some reason actually affects the time it takes to set aois only 
@@ -360,7 +371,7 @@ int setCameraParams() {
     // check time out
     is_GetTimeout(camera_handle, IS_TRIGGER_TIMEOUT, &curr_timeout);
     if (verbose) {
-        printf("Current trigger timeout: %i\n", curr_timeout);
+        printf("|\tCurrent trigger timeout: %i\t\t\t  |\n", curr_timeout);
     }
 
     return 1;
@@ -377,13 +388,14 @@ int loadCamera() {
 
     // initialize camera
 	if (is_InitCamera(&camera_handle, NULL) != IS_SUCCESS) {
+        printf("Error initializing camera in loadCamera().\n");
         return -1;
 	}
   
     // get sensor info
 	if (is_GetSensorInfo(camera_handle, &sensorInfo) != IS_SUCCESS) {
         cam_error = printCameraError();
-        printf("Error getting camera sensor information %s.\n", cam_error);
+        printf("Error getting camera sensor information: %s.\n", cam_error);
         return -1;
 	} 
 
@@ -400,13 +412,13 @@ int loadCamera() {
 	}
     curr_color_mode = is_SetColorMode(camera_handle, IS_GET_COLOR_MODE);
     if (verbose) {
-        printf("Camera model: %s\n", sensorInfo.strSensorName);
-        printf("Sensor ID/type: %i\n", sensorInfo.SensorID);
-        printf("Sensor color mode (from is_GetSensorInfo and is_SetColorMode): "
-               "%i / %i\n", sensorInfo.nColorMode, curr_color_mode);
-        printf("Maximum image width & height: %i, %i\n", sensorInfo.nMaxWidth, 
-                                                         sensorInfo.nMaxHeight);
-        printf("Pixel size (micrometers): %.2f\n", 
+        printf("|\tCamera model: %s\t\t\t  |\n", sensorInfo.strSensorName);
+        printf("|\tSensor ID/type: %i\t\t\t\t  |\n", sensorInfo.SensorID);
+        printf("|\tSensor color mode: %i / %i\t\t\t  |\n", 
+               sensorInfo.nColorMode, curr_color_mode);
+        printf("|\tMaximum image width & height: %i, %i\t  |\n", 
+               sensorInfo.nMaxWidth, sensorInfo.nMaxHeight);
+        printf("|\tPixel size (micrometers): %.2f\t\t\t  |\n", 
               ((double) sensorInfo.wPixelSize)/100.0);
     }
  	
@@ -446,7 +458,7 @@ int loadCamera() {
     is_PixelClock(camera_handle, IS_PIXELCLOCK_CMD_GET, (void *) &curr_pc, 
                   sizeof(curr_pc));
     if (verbose) {
-        printf("Pixel clock: %i\n", curr_pc);
+        printf("|\tPixel clock: %i\t\t\t\t\t  |\n", curr_pc);
     }
 
     // set frame rate
@@ -469,14 +481,9 @@ int loadCamera() {
     // get the current trigger setting
     curr_ext_trig = is_SetExternalTrigger(camera_handle, IS_GET_EXTERNALTRIGGER);
     if (verbose) {
-        printf("Current external trigger mode: %i\n", curr_ext_trig);
+        printf("|\tCurrent external trigger mode: %i\t\t  |\n", curr_ext_trig);
     }
 
-    // confirmation message that camera is initialized
-    if (verbose) {
-        printf("Done initializing camera.\n");
-        printf("----------------------------\n");
-    }
     return 1;
 }
 
@@ -520,8 +527,9 @@ void makeMask(char * ib, int i0, int j0, int i1, int j1, int x0, int y0,
 
         if (f) {
             if (verbose) {
-                printf("***************************** Loading static hot pixel "
-                       "map... *****************************\n");
+                printf("\n+---------------------------------------------------------+\n");
+                printf("|\t\tLoading static hot pixel map...\t\t  |\n");
+                printf("|---------------------------------------------------------|\n");
             }
 
             char * line = NULL;
@@ -543,11 +551,17 @@ void makeMask(char * ib, int i0, int j0, int i1, int j1, int x0, int y0,
                 y_p[num_p] = CAMERA_HEIGHT - j; 
 
                 if (verbose) {
-                    printf("Coordinates read from hp file: [%i, %i]\n", i, j);
+                    printf("|\tCoordinates read from hp file: [%4i, %4i]\t  |\n", 
+                           i, j);
                 }
 
                 num_p++;
             }
+            
+            if (verbose) {
+                printf("+---------------------------------------------------------+\n");
+            }
+
             fflush(f);
             fclose(f);
             free(line);
@@ -602,7 +616,7 @@ void makeMask(char * ib, int i0, int j0, int i1, int j1, int x0, int y0,
         }
 
         if (verbose) {
-            printf("\nNumber of hot pixels found: %d.\n", nhp);
+            printf("\n(*) Number of hot pixels found: %d.\n\n", nhp);
         }
     } else {
         for (j = j0; j < j1; j++) {
@@ -614,19 +628,24 @@ void makeMask(char * ib, int i0, int j0, int i1, int j1, int x0, int y0,
 
     if (all_blob_params.use_static_hp_mask) {
         if (verbose) {
-            printf("******************************* Masking %d pixels... "
-                   "*******************************\n", num_p);
+            printf("+---------------------------------------------------------+\n");
+            printf("|\t\tMasking %d pixels...\t\t\t  |\n", num_p);
+            printf("|---------------------------------------------------------|\n");
         }
 
         for (int i = 0; i < num_p; i++) {
             // set all static hot pixels to 0
             if (verbose) {
-                printf("Coordinates going into mask index: [%i, %i]\n", x_p[i], 
-                       CAMERA_HEIGHT - y_p[i]);
+                printf("|\tCoordinates going into mask: [%4i, %4i]\t  |\n", 
+                       x_p[i], CAMERA_HEIGHT - y_p[i]);
             }
 
             int ind = CAMERA_WIDTH * y_p[i] + x_p[i];
             mask[ind] = 0;
+        }
+
+        if (verbose) {
+            printf("+---------------------------------------------------------+\n");
         }
     }
 }
@@ -752,8 +771,9 @@ int findBlobs(char * input_buffer, int w, int h, double ** star_x,
                     int j = CAMERA_HEIGHT - yp; 
                     fprintf(f, "%d,%d\n", i, j);
                     if (verbose) {
-                        printf("Value of pixel (should be > %i): %d | Coordinates: "
-                               "[%d, %d]\n", all_blob_params.make_static_hp_mask, 
+                        printf("Value of pixel (should be > %i): %d | "
+                               "Coordinates: [%d, %d]\n", 
+                               all_blob_params.make_static_hp_mask, 
                                input_buffer[ind], i, j);
                     }
                 }
@@ -808,8 +828,13 @@ int findBlobs(char * input_buffer, int w, int h, double ** star_x,
     double mean_raw = sx_raw/num_pix;
     double sigma = sqrt((sx2 - sx*sx/num_pix)/num_pix);
     if (verbose) {
-        printf("\n*~*~*~*~*~*~*~*~ Blob-finding information *~*~*~*~*~*~*~*~\n");
-        printf("Mean = %f, sigma = %f, raw mean = %f\n", mean, sigma, mean_raw);
+        printf("\n+---------------------------------------------------------+\n");
+        printf("|\t\tBlob-finding calculations\t\t  |\n");
+        printf("|---------------------------------------------------------|\n");
+        printf("|\tMean = %f\t\t\t\t\t  |\n", mean);
+        printf("|\tSigma = %f\t\t\t\t  |\n", sigma);
+        printf("|\tRaw mean = %f\t\t\t\t  |\n", mean_raw);
+        printf("+---------------------------------------------------------+\n");
     }
 
     // fill output buffer if the variable is defined 
@@ -820,7 +845,7 @@ int findBlobs(char * input_buffer, int w, int h, double ** star_x,
 
         if (all_blob_params.filter_return_image) {
             if (verbose) {
-                printf("Filtering returned image...\n");
+                printf("\nFiltering returned image...\n");
             }
 
             for (int j = j0 + 1; j < j1 - 1; j++) {
@@ -844,7 +869,7 @@ int findBlobs(char * input_buffer, int w, int h, double ** star_x,
             }
         } else {
             if (verbose) {
-                printf("Not filtering the returned image...\n");
+                printf("\n> Not filtering the returned image...\n\n");
             }
 
             for (int j = j0; j < j1; j++) {
@@ -929,8 +954,9 @@ int findBlobs(char * input_buffer, int w, int h, double ** star_x,
     // merge sort
     part(*star_mags, 0, blob_count - 1, *star_x, *star_y); 
     if (verbose) {
-        printf("Number of blobs found in image: %i\n", blob_count);
+        printf("(*) Number of blobs found in image: %i\n\n", blob_count);
     }
+
     return blob_count;
 }
 
@@ -1082,7 +1108,7 @@ int doCameraAndAstrometry() {
 
     // data file to pass to lostInSpace
     strftime(datafile, sizeof(datafile), 
-             "/home/xscblast/Desktop/blastcam/data_%b-%d.txt", tm_info);
+             "/home/blast/Desktop/blastcam/data_%b-%d.txt", tm_info);
     
     // set file descriptor for observing file to NULL in case of previous bad
     // shutdown or termination of Astrometry
@@ -1219,7 +1245,7 @@ int doCameraAndAstrometry() {
         }
 
         // clear previous contents of auto-focusing file (open in write mode)
-        strftime(af_filename, sizeof(af_filename), "/home/xscblast/Desktop/"
+        strftime(af_filename, sizeof(af_filename), "/home/blast/Desktop/"
                                                    "blastcam/auto_focus_"
                                                    "starting_%Y-%m-%d_%H:%M:"
                                                    "%S.txt", 
@@ -1244,42 +1270,42 @@ int doCameraAndAstrometry() {
         all_blob_params.dynamic_hot_pixels = 0;
         
         // link the auto-focusing txt file to Kst for plotting
-        unlink("/home/xscblast/Desktop/blastcam/latest_auto_focus_data.txt");
+        unlink("/home/blast/Desktop/blastcam/latest_auto_focus_data.txt");
         symlink(af_filename, 
-                "/home/xscblast/Desktop/blastcam/latest_auto_focus_data.txt");
+                "/home/blast/Desktop/blastcam/latest_auto_focus_data.txt");
     }
 
     // take an image
-    if (verbose) {
-         printf("\nTaking a new image...\n");
-    }
+    // if (verbose) {
+    //      printf("\n> Taking a new image...\n\n");
+    // }
 
-    taking_image = 1;
-    if (is_FreezeVideo(camera_handle, IS_WAIT) != IS_SUCCESS) {
-        const char * last_error_str = printCameraError();
-        printf("Failed to capture new image: %s\n", last_error_str);
-    } 
-    taking_image = 0;
+    // taking_image = 1;
+    // if (is_FreezeVideo(camera_handle, IS_WAIT) != IS_SUCCESS) {
+    //     const char * last_error_str = printCameraError();
+    //     printf("Failed to capture new image: %s\n", last_error_str);
+    // } 
+    // taking_image = 0;
 
     // get the image from memory
     if (is_GetActSeqBuf(camera_handle, &buffer_num, &waiting_mem, &memory) 
         != IS_SUCCESS) {
-        fprintf(stderr, "Error retrieving the active image memory: %s.\n", 
-                strerror(errno));
+        cam_error = printCameraError();
+        printf("Error retrieving the active image memory: %s.\n", cam_error);
     }
 
     // testing pictures that have already been taken 
-    // if (loadDummyPicture(L"/home/xscblast/Desktop/2020-01-07--00-14-38--894_11114_to_14374.bmp", &memory) == 1) {
-    // if (loadDummyPicture(L"/home/xscblast/Desktop/blastcam/BMPs/auto_focus_at_0_brightest_blob_4232_at_x716_y333_2020-07-15_05:54:44.bmp", &memory) == 1) {
-    //     if (verbose) {
-    //         printf("Successfully loaded test picture.\n");
-    //     }
-    // } else {
-    //     fprintf(stderr, "Error loading test picture: %s.\n", strerror(errno));
-    //     // can't solve without a picture to solve on!
-    //     usleep(1000000);
-    //     return -1;
-    // }
+    if (loadDummyPicture(L"/home/blast/Desktop/blastcam/BMPs/load_image.bmp", 
+                         &memory) == 1) {
+        if (verbose) {
+            printf("Successfully loaded test picture.\n");
+        }
+    } else {
+        fprintf(stderr, "Error loading test picture: %s.\n", strerror(errno));
+        // can't solve without a picture to solve on!
+        usleep(1000000);
+        return -1;
+    }
 
     // find the blobs in the image
     blob_count = findBlobs(memory, CAMERA_WIDTH, CAMERA_HEIGHT, &star_x, 
@@ -1304,8 +1330,7 @@ int doCameraAndAstrometry() {
         char time_str[100];
 
         if (verbose) {
-            printf("\n~~~~~~~~~~~~~~~~~ Still in auto-focusing mode in "
-                   "doCameraAndAstrometry(). ~~~~~~~~~~~~~~~~~\n");
+            printf("\n>> Still auto-focusing!\n");
         }
 
         // find the brightest blob per picture
@@ -1322,7 +1347,7 @@ int doCameraAndAstrometry() {
                af_photo, all_camera_params.focus_position, brightest_blob);
 
         strftime(time_str, sizeof(time_str), "%Y-%m-%d_%H:%M:%S", tm_info);
-        sprintf(date, "/home/xscblast/Desktop/blastcam/BMPs/auto_focus_at_%d_"
+        sprintf(date, "/home/blast/Desktop/blastcam/BMPs/auto_focus_at_%d_"
                       "brightest_blob_%d_at_x%d_y%d_%s.bmp", 
                 all_camera_params.focus_position, brightest_blob, 
                 brightest_blob_x, brightest_blob_y, time_str);
@@ -1333,8 +1358,8 @@ int doCameraAndAstrometry() {
 
         if (af_photo >= all_camera_params.photos_per_focus) {
             if (verbose) {
-                printf("Processing auto-focus images for focus %d -> do not "
-                       "take an image.\n", all_camera_params.focus_position);
+                printf("> Processing auto-focus images for focus %d -> do not "
+                       "take an image...\n", all_camera_params.focus_position);
             }
 
             // find brightest of three brightest blobs for this batch of images
@@ -1346,7 +1371,7 @@ int doCameraAndAstrometry() {
             }
            
             all_camera_params.flux = max_flux;
-            printf("Brighest blob among %d photos for focus %d is %d.\n", 
+            printf("(*) Brighest blob among %d photos for focus %d is %d.\n", 
                    all_camera_params.photos_per_focus, 
                    all_camera_params.focus_position,
                    max_flux);
@@ -1364,7 +1389,7 @@ int doCameraAndAstrometry() {
             if (num_clients > 0) {
                 while (!telemetry_sent) {
                     if (verbose) {
-                        printf("Waiting for data to send to client...\n");
+                        printf("> Waiting for data to send to client...\n");
                     }
 
                     usleep(100000);
@@ -1418,7 +1443,7 @@ int doCameraAndAstrometry() {
 
                 // turn dynamic hot pixels back to whatever user had specified
                 if (verbose) {
-                    printf("Auto-focusing finished, so restoring dynamic hot "
+                    printf("> Auto-focusing finished, so restoring dynamic hot "
                            "pixels to previous value...\n");
                 }
 
@@ -1446,17 +1471,17 @@ int doCameraAndAstrometry() {
         send_data = 1;
 
         if (verbose) {
-            printf("~~~~~~~~~~~~~~~ No longer auto-focusing. ~~~~~~~~~~~~~~~~\n");
+            printf(">> No longer auto-focusing!\n");
         }
 
-        strftime(date, sizeof(date), "/home/xscblast/Desktop/blastcam/BMPs/"
+        strftime(date, sizeof(date), "/home/blast/Desktop/blastcam/BMPs/"
                                      "saved_image_%Y-%m-%d_%H:%M:%S.bmp", 
                                      tm_info);
         swprintf(filename, 200, L"%s", date);
 
         // write blob and time information to data file
         strftime(buff, sizeof(buff), "%b %d %H:%M:%S", tm_info); 
-        printf("Time going into lostInSpace: %s\n", buff);
+        printf("\nTime going into Astrometry.net: %s\n", buff);
 
         if (fprintf(fptr, "\r%li|%s|", seconds, buff) < 0) {
             fprintf(stderr, "Unable to write time and blob count to observing "
@@ -1466,12 +1491,12 @@ int doCameraAndAstrometry() {
 
         // solve astrometry
         if (verbose) {
-            printf("Trying to solve astrometry...\n");
+            printf("\n> Trying to solve astrometry...\n");
         }
 
         if (lostInSpace(star_x, star_y, star_mags, blob_count, tm_info, 
                         datafile) != 1) {
-            printf("Could not solve Astrometry.\n");
+            printf("\n(*) Could not solve Astrometry.\n");
         }
 
         // get current time right after solving
@@ -1485,7 +1510,8 @@ int doCameraAndAstrometry() {
 	    end = (double) (camera_tp_end.tv_sec*1e9) + 
               (double) camera_tp_end.tv_nsec;
         camera_time = end - start;
-	    printf("Camera completed one round in %f msec.\n", camera_time*1e-6);
+	    printf("(*) Camera completed one round in %f msec.\n", 
+               camera_time*1e-6);
 
         // write this time to the data file
         if (fprintf(fptr, "|%f", camera_time*1e-6) < 0) {
@@ -1507,9 +1533,9 @@ int doCameraAndAstrometry() {
 
     wprintf(L"Saving to \"%s\"\n", filename);
     // unlink whatever the latest saved image was linked to before
-    unlink("/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
+    unlink("/home/blast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
     // sym link current date to latest image for live Kst updates
-    symlink(date, "/home/xscblast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
+    symlink(date, "/home/blast/Desktop/blastcam/BMPs/latest_saved_image.bmp");
 
     // make a table of blobs for Kst
     if (makeTable("makeTable.txt", star_mags, star_x, star_y, blob_count) != 1) {
@@ -1519,7 +1545,7 @@ int doCameraAndAstrometry() {
     // free alloc'd variables when we are shutting down
     if (shutting_down) {
         if (verbose) {
-            printf("Freeing allocated variables in camera.c...\n");
+            printf("\n> Freeing allocated variables in camera.c...\n");
         }
 
         if (output_buffer != NULL) {
