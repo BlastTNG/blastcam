@@ -1,6 +1,5 @@
 #include <stdlib.h>
 #include <math.h>
-#include <errno.h>
 #include <astrometry/os-features.h>
 #include <astrometry/engine.h>
 #include <astrometry/solver.h>
@@ -14,6 +13,8 @@
 #include <astrometry/fileutils.h>
 #include <ueye.h>
 #include <sofa/sofa.h>
+#include "/home/xscblast/astrometry/blind/solver.c"
+#include "/home/xscblast/astrometry/blind/engine.c"
 
 #include "camera.h"
 #include "astrometry.h"
@@ -22,9 +23,9 @@
 
 #define _USE_MATH_DEFINES
 /* Longitude and latitude constants (deg) */
-#define backyard_lat   40.79149378
-#define backyard_long -73.68089614
-#define backyard_hm    58.17
+#define backyard_lat  45.619471
+#define backyard_long 9.220168
+#define backyard_hm   58.17
 
 engine_t * engine = NULL;
 solver_t * solver = NULL;
@@ -56,14 +57,14 @@ time_t timeout(void * arg) {
 
 	if (*(counter) != 0) {
 		if (verbose) {
-			printf("> Have yet to solve Astrometry. Decrementing time "
+			printf("Have yet to solve Astrometry. Decrementing time "
 			       "counter...\n");
 		}
 
 		(*counter)--;
 
 		if (verbose) {
-			printf("(*) Timeout counter is now %d.\n", *counter);
+			printf("Timeout counter is now %d.\n", *counter);
 		}
 	} 
 
@@ -71,7 +72,7 @@ time_t timeout(void * arg) {
 	// want to abort altogether)
 	if (shutting_down) {
 		if (verbose) {
-			printf("\n> Shutting down -> zeroing timeout counter.\n");
+			printf("Shutting down -> zeroing timeout counter.\n");
 		}
 		*counter = 0;
 	}
@@ -87,7 +88,7 @@ time_t timeout(void * arg) {
 int initAstrometry() {
 	engine = engine_new();
 	solver = solver_new();
-
+	
 	if (engine_parse_config_file(engine, 
 	                             "/usr/local/astrometry/etc/astrometry.cfg")) {
 		printf("Bad configuration file in Astrometry constructor.\n");
@@ -108,7 +109,7 @@ int initAstrometry() {
 */
 void closeAstrometry() {	
 	if (verbose) {
-		printf("> Closing Astrometry...\n");
+		printf("Closing Astrometry...\n");
 	}
 	engine_free(engine);
 	solver_free(solver);
@@ -136,8 +137,7 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned
 	// reset solver timeout
 	solver_timelimit = (int) all_astro_params.timelimit;
 	if (verbose) {
-		printf("(*) Astrometry timeout is %i cycles.\n", 
-	           *((int *) solver->userdata));
+		printf("Astrom. timeout is %i cycles.\n", *((int *) solver->userdata));
 	}
 
 	// set up solver configuration
@@ -247,7 +247,7 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned
 		all_astro_params.fr = fr;
 		all_astro_params.ps = ps;
 
-    	printf("\n+---------------------------------------------------------+\n");
+		printf("\n+---------------------------------------------------------+\n");
 		printf("|\t\tTelemetry\t\t\t\t  |\n");
 		printf("|---------------------------------------------------------|\n");
 		printf("|\tRaw time (sec): %.1f\t\t\t  |\n", all_astro_params.rawtime);
@@ -263,39 +263,46 @@ int lostInSpace(double * star_x, double * star_y, double * star_mags, unsigned
 		printf("|\tAzimuth (deg): %.15f\t\t  |\n", all_astro_params.az);
 		printf("+---------------------------------------------------------+\n\n");
 
+
 		// calculate how long solution took to solve in terms of nanoseconds
-		start = (double) (astrom_tp_beginning.tv_sec*1e9) + 
-		        (double) astrom_tp_beginning.tv_nsec;
-		end = (double) (astrom_tp_end.tv_sec*1e9) + 
-		      (double) astrom_tp_end.tv_nsec;
-    	astrom_time = end - start;
-		printf("(*) Astrometry solved in %f msec.\n", astrom_time*1e-6);
+		start = (double) (astrom_tp_beginning.tv_sec*1e9) + (double) astrom_tp_beginning.tv_nsec;
+		end = (double) (astrom_tp_end.tv_sec*1e9) + (double) astrom_tp_end.tv_nsec;
+    		astrom_time = end - start;
+		printf("Astrometry solved in %f msec.\n", astrom_time*1e-6);
 
 		// write astrometry solution to data.txt file
 		if (verbose) {
-			printf("> Writing Astrometry solution to data file...\n");
+			printf(" > Writing Astrometry solution to data file...\n");
 		}
 
-    	if ((fptr = fopen(datafile, "a")) == NULL) {
-    	    fprintf(stderr, "Could not open observing file: %s.\n", 
-			        strerror(errno));
-    	    return sol_status;
-    	}
-
-		if (fprintf(fptr, "%i|%lf|%lf|%lf|%lf|%.15f|%.15f|%lf|%f", num_blobs, 
-		            all_astro_params.ra, all_astro_params.dec, 
-					all_astro_params.fr, all_astro_params.ps, 
-					all_astro_params.alt, all_astro_params.az, 
-					all_astro_params.ir, astrom_time*1e-6) < 0) {
-			fprintf(stderr, "Error writing solution to observing file: %s.\n", 
-			        strerror(errno));
+		if ((fptr = fopen(datafile, "a")) == NULL) {
+		    fprintf(stderr, "Could not open observing file: %s.\n", 
+					strerror(errno));
+		    return sol_status;
 		}
+
+
+		if (fprintf(fptr, "%i\t%lf\t%lf\t%lf\t%lf\t%.15f\t%.15f\t%lf\t%f", num_blobs, 
+              			all_astro_params.ra, all_astro_params.dec, 
+  						all_astro_params.fr, all_astro_params.ps, 
+  						all_astro_params.alt, all_astro_params.az, 
+  						all_astro_params.ir, astrom_time*1e-6) < 0) {
+  			fprintf(stderr, "Error writing solution to observing file: %s.\n", 
+  	        	strerror(errno));
+  		}
+	
 		fflush(fptr);
 		fclose(fptr);
 
 		// we achieved a solution!
 		sol_status = 1;
-	} 
+	} else {
+		// if no solution was found, write a line of 0s to the data file for ease of post-run data analysis
+		if (fprintf(fptr, "0\t0\t0\t0\t0\t0\t0\t0\t0\t") < 0) {
+            fprintf(stderr, "Unable to write time and blob count to observing file: %s.\n", strerror(errno));
+			}
+    }
+	
 	// clean everything up and return the status
 	solver_cleanup_field(solver);
 	solver_clear_indexes(solver);
