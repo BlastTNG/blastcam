@@ -1077,7 +1077,8 @@ int doCameraAndAstrometry() {
     static int num_focus_pos;
     static int * blob_mags;
     int blob_count;
-    char datafile[100], buff[100], date[256], af_filename[256];
+    char datafile[100], buff[100], date[256];
+    static char af_filename[256];
     wchar_t filename[200] = L"";
     struct timespec camera_tp_beginning, camera_tp_end; 
     time_t seconds = time(NULL);
